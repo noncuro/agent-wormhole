@@ -25,12 +25,13 @@ def send(
     code: str = typer.Argument(help="Channel code"),
     message: str = typer.Argument(default=None, help="Text message to send"),
     file: str = typer.Option(None, "--file", help="Path to file to send"),
+    role: str = typer.Option(None, "--role", help="Role (host/peer). Auto-detected if only one is present."),
 ):
     """Send a message or file through a channel."""
     if message is None and file is None:
         typer.echo("Error: provide a message or --file", err=True)
         raise typer.Exit(1)
-    send_to_outbox(code, message=message, file_path=file)
+    send_to_outbox(code, message=message, file_path=file, role=role)
 
 
 @app.command()
@@ -45,9 +46,15 @@ def status():
         typer.echo("No active channels")
         return
     for ch in channels:
-        outbox = base / ch / "outbox"
-        has_outbox = outbox.exists()
-        typer.echo(f"  {ch} {'(active)' if has_outbox else '(idle)'}")
+        has_host = (base / ch / "outbox-host").exists()
+        has_peer = (base / ch / "outbox-peer").exists()
+        roles = []
+        if has_host:
+            roles.append("host")
+        if has_peer:
+            roles.append("peer")
+        status_str = f"({', '.join(roles)})" if roles else "(idle)"
+        typer.echo(f"  {ch} {status_str}")
 
 
 @app.command()

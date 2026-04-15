@@ -12,6 +12,7 @@ from agent_wormhole.crypto import Handshake, SessionKeys, decrypt, encrypt
 from agent_wormhole.fs import (
     DEFAULT_BASE,
     cleanup_channel,
+    detect_role,
     get_outbox_path,
     init_channel_dir,
     safe_save_file,
@@ -73,10 +74,11 @@ async def _outbox_watcher(
     keys: SessionKeys,
     writer: asyncio.StreamWriter,
     *,
+    role: str,
     base: Path = DEFAULT_BASE,
 ) -> None:
     """Poll the outbox file and send new messages over the wire."""
-    outbox_path = get_outbox_path(code, base=base)
+    outbox_path = get_outbox_path(code, role=role, base=base)
     last_pos = 0
 
     while True:
@@ -168,7 +170,7 @@ async def run_host(
     server = await asyncio.start_server(handle_client, "0.0.0.0", port)
     actual_port = server.sockets[0].getsockname()[1]
     code = generate_code(port=actual_port)
-    channel_dir = init_channel_dir(code, base=base)
+    channel_dir = init_channel_dir(code, role="host", base=base)
 
     _emit(output, {"type": "status", "event": "channel", "code": code})
     _emit(output, {"type": "status", "event": "waiting"})
@@ -203,7 +205,7 @@ async def run_host(
     try:
         # Run outbox watcher and receiver concurrently
         await asyncio.gather(
-            _outbox_watcher(code, keys, writer, base=base),
+            _outbox_watcher(code, keys, writer, role="host", base=base),
             _receiver(code, keys, reader, output, base=base),
         )
     finally:
@@ -222,7 +224,7 @@ async def run_peer(
     if not hostname:
         raise ValueError("Target must include hostname: <code>@<hostname>")
 
-    channel_dir = init_channel_dir(code, base=base)
+    channel_dir = init_channel_dir(code, role="peer", base=base)
 
     try:
         if timeout:
@@ -248,7 +250,7 @@ async def run_peer(
 
     try:
         await asyncio.gather(
-            _outbox_watcher(code, keys, writer, base=base),
+            _outbox_watcher(code, keys, writer, role="peer", base=base),
             _receiver(code, keys, reader, output, base=base),
         )
     finally:
@@ -261,10 +263,17 @@ def send_to_outbox(
     message: str | None = None,
     *,
     file_path: str | None = None,
+    role: str | None = None,
     base: Path = DEFAULT_BASE,
 ) -> None:
-    """Append a message to the channel's outbox file."""
-    outbox = get_outbox_path(code, base=base)
+    """Append a message to the channel's outbox file.
+
+    If role is None, auto-detects which role is present locally.
+    On same-machine setups (both roles present), role must be specified.
+    """
+    if role is None:
+        role = detect_role(code, base=base)
+    outbox = get_outbox_path(code, role=role, base=base)
     if message is not None:
         entry = json.dumps({"type": "text", "body": message})
     elif file_path is not None:

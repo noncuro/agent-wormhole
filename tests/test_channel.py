@@ -33,7 +33,7 @@ class TestEndToEnd:
         await asyncio.sleep(0.5)
 
         # Send text from host to peer via outbox
-        send_to_outbox(code, "hello from host")
+        send_to_outbox(code, "hello from host", role="host")
         await asyncio.sleep(0.3)
 
         # Check peer received the message
@@ -89,10 +89,10 @@ class TestSendToOutbox:
     def test_send_text_creates_outbox_entry(self, tmp_path):
         from agent_wormhole.fs import init_channel_dir
         code = "1234-alpha-bravo-charlie"
-        init_channel_dir(code, base=tmp_path)
-        send_to_outbox(code, "hello", base=tmp_path)
+        init_channel_dir(code, role="host", base=tmp_path)
+        send_to_outbox(code, "hello", role="host", base=tmp_path)
 
-        outbox = tmp_path / code / "outbox"
+        outbox = tmp_path / code / "outbox-host"
         lines = outbox.read_text().strip().split("\n")
         assert len(lines) == 1
         msg = json.loads(lines[0])
@@ -101,14 +101,14 @@ class TestSendToOutbox:
     def test_send_file_creates_outbox_entry(self, tmp_path):
         from agent_wormhole.fs import init_channel_dir
         code = "1234-alpha-bravo-charlie"
-        init_channel_dir(code, base=tmp_path)
+        init_channel_dir(code, role="host", base=tmp_path)
 
         test_file = tmp_path / "test.txt"
         test_file.write_text("file content")
 
-        send_to_outbox(code, file_path=str(test_file), base=tmp_path)
+        send_to_outbox(code, file_path=str(test_file), role="host", base=tmp_path)
 
-        outbox = tmp_path / code / "outbox"
+        outbox = tmp_path / code / "outbox-host"
         lines = outbox.read_text().strip().split("\n")
         msg = json.loads(lines[0])
         assert msg["type"] == "file"

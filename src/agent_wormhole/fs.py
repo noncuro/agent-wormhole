@@ -18,10 +18,10 @@ def sanitize_filename(name: str) -> str | None:
     return basename
 
 
-def init_channel_dir(code: str, *, base: Path = DEFAULT_BASE) -> Path:
+def init_channel_dir(code: str, *, role: str, base: Path = DEFAULT_BASE) -> Path:
     """Create the channel directory structure with secure permissions.
 
-    Clears any stale outbox from a previous session.
+    Clears any stale outbox for this role from a previous session.
     Verifies ownership of existing base directory.
     """
     if base.exists():
@@ -34,8 +34,8 @@ def init_channel_dir(code: str, *, base: Path = DEFAULT_BASE) -> Path:
     (channel_dir / "files").mkdir(mode=0o700, exist_ok=True)
     (channel_dir / "messages").mkdir(mode=0o700, exist_ok=True)
 
-    # Clear stale outbox
-    outbox = channel_dir / "outbox"
+    # Clear stale outbox for this role
+    outbox = channel_dir / f"outbox-{role}"
     if outbox.exists():
         outbox.unlink()
 
@@ -49,9 +49,29 @@ def cleanup_channel(code: str, *, base: Path = DEFAULT_BASE) -> None:
         shutil.rmtree(channel_dir)
 
 
-def get_outbox_path(code: str, *, base: Path = DEFAULT_BASE) -> Path:
-    """Get the outbox file path for a channel."""
-    return base / code / "outbox"
+def get_outbox_path(code: str, *, role: str, base: Path = DEFAULT_BASE) -> Path:
+    """Get the outbox file path for a channel role."""
+    return base / code / f"outbox-{role}"
+
+
+def detect_role(code: str, *, base: Path = DEFAULT_BASE) -> str:
+    """Auto-detect the local role by checking which outbox marker exists.
+
+    Returns 'host' or 'peer'. Raises ValueError if ambiguous (both present)
+    or neither present.
+    """
+    channel_dir = base / code
+    has_host = (channel_dir / "outbox-host").exists()
+    has_peer = (channel_dir / "outbox-peer").exists()
+    if has_host and has_peer:
+        raise ValueError(
+            "Both host and peer are on this machine. Use --role host or --role peer."
+        )
+    if has_host:
+        return "host"
+    if has_peer:
+        return "peer"
+    raise ValueError(f"No active channel found for code {code}")
 
 
 def safe_save_file(code: str, name: str, data: bytes, *, base: Path = DEFAULT_BASE) -> Path:

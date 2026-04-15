@@ -35,14 +35,14 @@ async def test_full_text_roundtrip(tmp_base):
     await asyncio.sleep(0.5)
 
     # Host sends to peer
-    send_to_outbox(code, "hello peer", base=tmp_base)
+    send_to_outbox(code, "hello peer", role="host", base=tmp_base)
     await asyncio.sleep(0.3)
 
     peer_lines = [json.loads(l) for l in peer_out.getvalue().strip().split("\n") if l.strip()]
     assert any(m.get("body") == "hello peer" for m in peer_lines)
 
     # Peer sends to host
-    send_to_outbox(code, "hello host", base=tmp_base)
+    send_to_outbox(code, "hello host", role="peer", base=tmp_base)
     await asyncio.sleep(0.3)
 
     host_lines = [json.loads(l) for l in host_out.getvalue().strip().split("\n") if l.strip()]
@@ -75,7 +75,7 @@ async def test_file_transfer(tmp_base):
     # Create a test file and send it
     test_file = tmp_base / "send_me.txt"
     test_file.write_text("secret credentials here")
-    send_to_outbox(code, file_path=str(test_file), base=tmp_base)
+    send_to_outbox(code, file_path=str(test_file), role="host", base=tmp_base)
     await asyncio.sleep(0.5)
 
     # Check peer received the file
@@ -113,7 +113,7 @@ async def test_large_text_saved_to_file(tmp_base):
     await asyncio.sleep(0.5)
 
     large_text = "x" * 2000
-    send_to_outbox(code, large_text, base=tmp_base)
+    send_to_outbox(code, large_text, role="host", base=tmp_base)
     await asyncio.sleep(0.5)
 
     peer_lines = [json.loads(l) for l in peer_out.getvalue().strip().split("\n") if l.strip()]

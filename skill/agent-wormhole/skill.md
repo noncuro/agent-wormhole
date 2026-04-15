@@ -42,16 +42,22 @@ Start a channel and share the code with the other instance:
 
 ## Sending Messages
 
-Use Bash to send:
+Use Bash to send. Include `--role host` or `--role peer` matching your side of the channel:
 
 ```bash
-agent-wormhole send <code> "your message here"
+# If you hosted the channel:
+agent-wormhole send <code> "your message here" --role host
+
+# If you connected to the channel:
+agent-wormhole send <code> "your message here" --role peer
 ```
 
 To send a file:
 ```bash
-agent-wormhole send <code> --file /path/to/file
+agent-wormhole send <code> --file /path/to/file --role host
 ```
+
+The `--role` flag is required when both host and peer run on the same machine. On separate machines it auto-detects.
 
 ## Receiving Messages
 
