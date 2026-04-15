@@ -248,6 +248,7 @@ A skill that ships with the repo at `skill/agent-wormhole/skill.md`. Teaches Cla
 - How to set up Monitor for receiving
 - How to parse the JSON stdout format
 - Message conventions (JSON for structured data, acknowledgment patterns)
+- **Cleanup awareness**: Save any received credentials, configs, or important data to their permanent destination (1Password, .env, project files, etc.) before closing the channel — cleanup wipes all temp files
 - How to signal "done" and close the channel
 
 The skill can be symlinked into `~/.claude/skills/` for use across projects.
