@@ -185,11 +185,54 @@ src/agent_wormhole/
 
 ## Deployment
 
-- **Platform**: Railway
-- **Services**: 1 web service (relay) + 1 Redis instance
-- **Dockerfile** or Railway `nixpacks` for the relay service
-- Health check on `GET /health`
-- Environment variables: `REDIS_URL` (provided by Railway Redis plugin)
+### Platform: Railway
+
+Railway MCP tools are available for managing the deployment. For Railway usage patterns and CLI reference, see the Railway skill at `~/Documents/GitHub/slackbot-task-assistant/.claude/skills/railway.md`.
+
+### Services
+
+| Service | Purpose | Notes |
+|---------|---------|-------|
+| relay | FastAPI WebSocket relay server | Nixpacks auto-detects Python |
+| Redis | Message streams + channel metadata | Railway-managed Redis plugin |
+
+### Configuration (`railway.toml`)
+
+```toml
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "uvicorn agent_wormhole.relay.server:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+```
+
+### Environment variables
+
+- `REDIS_URL` -- auto-configured via `${{Redis.REDIS_URL}}` cross-service reference
+- `PORT` -- injected by Railway
+- `RAILWAY_PUBLIC_DOMAIN` -- used to set `DEFAULT_RELAY_URL` at build time (or hardcoded after first deploy)
+
+### Deployment workflow
+
+1. Create Railway project with `mcp__Railway__create-project-and-link`
+2. Add Redis service from Railway dashboard or template
+3. Set `REDIS_URL` variable via `mcp__Railway__set-variables` referencing `${{Redis.REDIS_URL}}`
+4. Generate public domain via `mcp__Railway__generate-domain`
+5. Push to main branch for auto-deploy, or manual deploy via `mcp__Railway__deploy`
+6. Verify with `mcp__Railway__get-logs` and health check endpoint
+
+### Public URL
+
+After first deploy, the relay will be available at:
+```
+wss://<generated-domain>.up.railway.app/ws
+```
+
+Update `DEFAULT_RELAY_URL` in `config.py` with the actual domain after the first deploy.
 
 ## Error handling
 
