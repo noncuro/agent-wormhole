@@ -10,13 +10,23 @@ Secure, encrypted communication channel between two Claude Code instances.
 
 ## Prerequisites
 
-`agent-wormhole` must be installed. If not already available, install from the local repo:
+`agent-wormhole` must be installed. Check if it's available:
 
 ```bash
-cd ~/Documents/GitHub/agent-wormhole && uv sync
+agent-wormhole --help
 ```
 
-Then commands are run as `uv run agent-wormhole <command>` from that directory, or install globally with `uv tool install -e ~/Documents/GitHub/agent-wormhole`.
+If not installed, install it:
+
+```bash
+pip install git+https://github.com/noncuro/agent-wormhole.git
+```
+
+Or with uv:
+
+```bash
+uv tool install git+https://github.com/noncuro/agent-wormhole.git
+```
 
 ## Hosting a Channel (you are the initiator)
 
