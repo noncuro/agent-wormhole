@@ -1,0 +1,29 @@
+[project]
+name = "agent-wormhole"
+version = "0.1.0"
+description = "Secure ephemeral channels for AI agent communication"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.9",
+    "spake2>=0.9",
+    "cryptography>=42.0",
+]
+
+[project.scripts]
+agent-wormhole = "agent_wormhole.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
