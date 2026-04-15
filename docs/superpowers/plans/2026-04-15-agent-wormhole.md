@@ -193,11 +193,10 @@ def test_generate_code_format():
     assert parts[3] in WORDS
 
 
-def test_generate_code_random_port():
-    code = generate_code(port=0)
+def test_generate_code_preserves_port():
+    code = generate_code(port=12345)
     parts = code.split("-")
-    port = int(parts[0])
-    assert 1024 <= port <= 65535
+    assert parts[0] == "12345"
 
 
 def test_parse_code_with_host():
@@ -225,7 +224,7 @@ def test_parse_code_invalid_format():
 
 
 def test_generate_codes_are_unique():
-    codes = {generate_code(port=9471) for _ in range(50)}
+    codes = {generate_code(port=5555) for _ in range(50)}
     assert len(codes) > 1
 ```
 
@@ -300,15 +299,11 @@ WORDS = _WORDS_FILE.read_text().strip().splitlines()
 assert len(WORDS) == 256, f"Expected 256 words, got {len(WORDS)}"
 
 
-def generate_code(port: int = 0) -> str:
+def generate_code(port: int) -> str:
     """Generate a channel code like '9471-alpha-bravo-charlie'.
     
-    If port is 0, picks a random available port.
+    Port must be provided (the actual bound port from the server).
     """
-    if port == 0:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            port = s.getsockname()[1]
     w1 = secrets.choice(WORDS)
     w2 = secrets.choice(WORDS)
     w3 = secrets.choice(WORDS)
@@ -394,17 +389,29 @@ def test_handshake_matching_passwords():
 
 
 def test_handshake_mismatched_passwords():
-    """Mismatched passwords produce different keys (and decryption will fail)."""
+    """Mismatched passwords cause key derivation to produce incompatible keys.
+    
+    Note: spake2 library may raise on finish() or may silently produce
+    different keys depending on version. Either way, encryption/decryption
+    will fail. We test that the resulting keys cannot communicate.
+    """
     host = Handshake.host(b"9471-alpha-bravo-charlie")
     peer = Handshake.peer(b"9471-wrong-wrong-wrong")
 
     msg_host = host.start()
     msg_peer = peer.start()
 
-    keys_host = host.finish(msg_peer)
-    keys_peer = peer.finish(msg_host)
+    try:
+        keys_host = host.finish(msg_peer)
+        keys_peer = peer.finish(msg_host)
+    except Exception:
+        # SPAKE2 may raise on mismatched passwords — that's fine
+        return
 
-    assert keys_host.send_key != keys_peer.recv_key
+    # If it didn't raise, the keys should be incompatible
+    ciphertext = encrypt(keys_host, b"test", sending=True)
+    with pytest.raises(Exception):
+        decrypt(keys_peer, ciphertext, receiving=True)
 
 
 def test_encrypt_decrypt_roundtrip():
@@ -979,7 +986,12 @@ def init_channel_dir(code: str, *, base: Path = DEFAULT_BASE) -> Path:
     """Create the channel directory structure with secure permissions.
     
     Clears any stale outbox from a previous session.
+    Verifies ownership of existing base directory.
     """
+    if base.exists():
+        stat = base.stat()
+        if stat.st_uid != os.getuid():
+            raise PermissionError(f"Base directory {base} is owned by uid {stat.st_uid}, not current user")
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     channel_dir = base / code
     channel_dir.mkdir(mode=0o700, exist_ok=True)
@@ -1208,6 +1220,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from io import StringIO
@@ -1337,8 +1350,9 @@ async def _receiver(
         try:
             raw = decrypt(keys, encrypted, receiving=True).decode()
         except Exception:
-            _emit(output, {"type": "status", "event": "error", "detail": "decryption failed"})
-            continue
+            # Decrypt failure means nonce desync or tampered data — channel is broken
+            _emit(output, {"type": "status", "event": "error", "detail": "decryption failed, closing channel"})
+            return
 
         msg = parse_message(raw)
 
@@ -1365,8 +1379,16 @@ async def run_host(
     base: Path = DEFAULT_BASE,
 ) -> None:
     """Host a channel: listen, handshake, then run send/receive loops."""
-    code = generate_code(port=port)
-    port_actual, _, _ = parse_code(code)
+    # Bind first, then generate code with the actual port (avoids race condition)
+    connected: asyncio.Future[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = asyncio.Future()
+
+    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        if not connected.done():
+            connected.set_result((reader, writer))
+
+    server = await asyncio.start_server(handle_client, "0.0.0.0", port)
+    actual_port = server.sockets[0].getsockname()[1]
+    code = generate_code(port=actual_port)
     channel_dir = init_channel_dir(code, base=base)
 
     _emit(output, {"type": "status", "event": "channel", "code": code})
@@ -1374,14 +1396,6 @@ async def run_host(
 
     if on_code:
         on_code(code)
-
-    connected: asyncio.Future[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = asyncio.Future()
-
-    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        if not connected.done():
-            connected.set_result((reader, writer))
-
-    server = await asyncio.start_server(handle_client, "0.0.0.0", port_actual)
 
     try:
         if timeout:
@@ -1391,6 +1405,7 @@ async def run_host(
     except asyncio.TimeoutError:
         server.close()
         _emit(output, {"type": "status", "event": "timeout"})
+        cleanup_channel(code, base=base)
         return
 
     # Stop accepting new connections (single-use)
@@ -1401,15 +1416,20 @@ async def run_host(
     except Exception as e:
         _emit(output, {"type": "status", "event": "handshake_failed", "detail": str(e)})
         writer.close()
+        cleanup_channel(code, base=base)
         return
 
     _emit(output, {"type": "status", "event": "connected"})
 
-    # Run outbox watcher and receiver concurrently
-    await asyncio.gather(
-        _outbox_watcher(code, keys, writer, base=base),
-        _receiver(code, keys, reader, output, base=base),
-    )
+    try:
+        # Run outbox watcher and receiver concurrently
+        await asyncio.gather(
+            _outbox_watcher(code, keys, writer, base=base),
+            _receiver(code, keys, reader, output, base=base),
+        )
+    finally:
+        writer.close()
+        cleanup_channel(code, base=base)
 
 
 async def run_peer(
@@ -1434,6 +1454,7 @@ async def run_peer(
             reader, writer = await asyncio.open_connection(hostname, port)
     except Exception as e:
         _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
+        cleanup_channel(code, base=base)
         return
 
     try:
@@ -1441,14 +1462,19 @@ async def run_peer(
     except Exception as e:
         _emit(output, {"type": "status", "event": "handshake_failed", "detail": str(e)})
         writer.close()
+        cleanup_channel(code, base=base)
         return
 
     _emit(output, {"type": "status", "event": "connected"})
 
-    await asyncio.gather(
-        _outbox_watcher(code, keys, writer, base=base),
-        _receiver(code, keys, reader, output, base=base),
-    )
+    try:
+        await asyncio.gather(
+            _outbox_watcher(code, keys, writer, base=base),
+            _receiver(code, keys, reader, output, base=base),
+        )
+    finally:
+        writer.close()
+        cleanup_channel(code, base=base)
 
 
 def send_to_outbox(
@@ -1468,8 +1494,11 @@ def send_to_outbox(
     else:
         raise ValueError("Must provide either message or file_path")
 
-    with open(outbox, "a") as f:
-        f.write(entry + "\n")
+    fd = os.open(str(outbox), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, (entry + "\n").encode())
+    finally:
+        os.close(fd)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1689,7 +1718,7 @@ Channel cleanup deletes ALL temporary files. Before closing a channel, save anyt
 agent-wormhole close <code>
 ```
 
-Or just cancel the Monitor — the channel cleans up on disconnect.
+The channel also cleans up automatically on disconnect (e.g., if the peer closes their end or the Monitor is cancelled). But prefer explicit `close` to ensure cleanup happens.
 
 ## Status Events
 

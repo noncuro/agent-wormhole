@@ -67,13 +67,13 @@ When `host` or `connect` runs, it starts a single long-running process with thre
 
 1. **TCP connection** — holds the encrypted link to the peer
 2. **Stdout printer** — prints incoming messages to stdout as JSON (consumed by Claude Code's Monitor tool)
-3. **Outbox watcher** — watches `/tmp/agent-wormhole/<code>.outbox` for outgoing messages, sends them over the wire
+3. **Outbox watcher** — watches `/tmp/agent-wormhole/<code>/outbox` for outgoing messages, sends them over the wire
 
 No daemon, no Unix socket, no PID files. The process lives as a Claude Code background job (via Monitor or `run_in_background`).
 
 ### Sending Messages
 
-`agent-wormhole send <code> "msg"` appends to `/tmp/agent-wormhole/<code>.outbox`. The background process detects the new content via polling (0.1s interval) and sends it encrypted over TCP.
+`agent-wormhole send <code> "msg"` appends to `/tmp/agent-wormhole/<code>/outbox`. The background process detects the new content via polling (0.1s interval) and sends it encrypted over TCP.
 
 For files, `send --file` writes a JSON envelope to the outbox with base64-encoded content.
 
@@ -136,7 +136,7 @@ agent-wormhole send 9471-crossover-clockwork-marble "hello from A"
 
 3. **SPAKE2 handshake**:
    - Both sides use the full channel code (including port prefix) as the SPAKE2 password
-   - SPAKE2 (from Python `cryptography` library, using Ed25519 group) performs a password-authenticated key exchange
+   - SPAKE2 (from the `spake2` Python package — `cryptography` does not expose SPAKE2 publicly) performs a password-authenticated key exchange
    - Produces a shared session key without sending the code over the wire
    - If codes don't match, handshake fails — no information leaks about the code
    - After failed handshake, host closes the listener (no retry, no brute-force window)
@@ -233,7 +233,8 @@ agent-wormhole/
 ### Dependencies
 
 - `typer` — CLI framework
-- `cryptography` — SPAKE2, HKDF-SHA256, AES-256-GCM
+- `spake2` — SPAKE2 password-authenticated key exchange
+- `cryptography` — HKDF-SHA256, AES-256-GCM
 - Standard library: `asyncio`, `json`, `base64`, `pathlib`, `os`, `signal`
 
 File watching: polling (0.1s interval) for outbox changes. Simple, cross-platform, no extra dependencies. Latency is negligible for this use case.
