@@ -38,9 +38,15 @@ agent-wormhole send 9471-crossover-clockwork-marble --file ./config.json
 4. Two direction-separated AES-256-GCM keys are derived via HKDF
 5. Messages flow bidirectionally over the encrypted channel
 
-## Claude Code Integration
+## Claude Code Skill
 
-agent-wormhole is designed to work with Claude Code's Monitor tool for real-time bidirectional messaging between AI agent sessions. See `skill/agent-wormhole/skill.md` for the Claude Code skill.
+agent-wormhole ships with a Claude Code skill so your AI agents know how to use it. Install the skill by symlinking into your skills directory:
+
+```bash
+ln -s ~/path/to/agent-wormhole/skill ~/.claude/skills/agent-wormhole
+```
+
+Then any Claude Code session can use `/agent-wormhole` to host, connect, and exchange messages. The skill teaches Claude how to set up Monitor for real-time message delivery, send text and files, and clean up properly.
 
 ## Security
 
