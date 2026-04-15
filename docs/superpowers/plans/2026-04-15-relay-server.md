@@ -559,9 +559,9 @@ async def test_send_and_receive_frame(mgr):
     await mgr.join("test-code", "peer")
 
     await mgr.send_frame("test-code", "host", b"hello from host")
-    frames = await mgr.read_frames("test-code", "peer")
-    assert len(frames) == 1
-    assert frames[0] == b"hello from host"
+    entries = await mgr.read_frames("test-code", "peer")
+    assert len(entries) == 1
+    assert entries[0]["frame"] == b"hello from host"
 
 
 @pytest.mark.asyncio
@@ -573,18 +573,18 @@ async def test_cursor_persists_across_reads(mgr):
     await mgr.send_frame("test-code", "host", b"msg2")
 
     # First read gets both
-    frames = await mgr.read_frames("test-code", "peer")
-    assert len(frames) == 2
+    entries = await mgr.read_frames("test-code", "peer")
+    assert len(entries) == 2
 
     # Second read gets nothing (cursor advanced)
-    frames = await mgr.read_frames("test-code", "peer")
-    assert len(frames) == 0
+    entries = await mgr.read_frames("test-code", "peer")
+    assert len(entries) == 0
 
     # New message after cursor
     await mgr.send_frame("test-code", "host", b"msg3")
-    frames = await mgr.read_frames("test-code", "peer")
-    assert len(frames) == 1
-    assert frames[0] == b"msg3"
+    entries = await mgr.read_frames("test-code", "peer")
+    assert len(entries) == 1
+    assert entries[0]["frame"] == b"msg3"
 
 
 @pytest.mark.asyncio
@@ -634,6 +634,7 @@ Create `src/agent_wormhole/relay/redis_manager.py`:
 """Redis Streams manager for relay channel state."""
 from __future__ import annotations
 
+import json
 import time
 
 from redis.asyncio import Redis
@@ -687,15 +688,24 @@ class RedisManager:
             args=[role, now, str(CHANNEL_TTL)],
         )
         if result == 1:
-            # Initialize cursor to read from beginning
+            # Initialize cursor only if not already set (preserves cursor on reconnect)
             cursor_key = _cursor_key(code, role)
-            await self._redis.set(cursor_key, "0-0", ex=CHANNEL_TTL)
+            await self._redis.set(cursor_key, "0-0", ex=CHANNEL_TTL, nx=True)
         return result == 1
 
     async def disconnect(self, code: str, role: str) -> None:
-        """Mark a role as disconnected."""
+        """Mark a role as disconnected and notify the other side."""
         key = _meta_key(code)
         await self._redis.hset(key, f"{role}_connected", "0")
+        # Push a disconnect notification through the stream so the other side's
+        # writer loop delivers it as a control message
+        other = "peer" if role == "host" else "host"
+        stream = _stream_key(code, role)
+        await self._redis.xadd(
+            stream,
+            {"control": json.dumps({"type": "status", "event": "peer_disconnected"}).encode()},
+            maxlen=STREAM_MAXLEN,
+        )
 
     async def get_meta(self, code: str) -> dict[str, str]:
         """Get channel metadata."""
@@ -711,13 +721,17 @@ class RedisManager:
         """Add a frame to the outbound stream for from_role."""
         stream = _stream_key(code, from_role)
         await self._redis.xadd(stream, {"frame": data}, maxlen=STREAM_MAXLEN)
-        # Reset TTL on activity
-        await self._redis.expire(_meta_key(code), CHANNEL_TTL)
+        # Reset TTL on all channel keys
+        await self._touch_all(code)
 
     async def read_frames(
         self, code: str, for_role: str, block_ms: int = 0
-    ) -> list[bytes]:
-        """Read new frames for a role from its inbound stream.
+    ) -> list[dict]:
+        """Read new entries for a role from its inbound stream.
+
+        Returns list of dicts, each with either:
+        - {"frame": bytes} for data frames
+        - {"control": dict} for control messages (e.g. peer_disconnected)
 
         Updates the persisted cursor after reading.
         """
@@ -738,24 +752,35 @@ class RedisManager:
         else:
             result = await self._redis.xread({stream: cursor}, count=100)
 
-        frames = []
+        entries = []
         last_id = cursor
         for _stream_name, messages in result:
             for msg_id, fields in messages:
                 msg_id_str = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
-                frames.append(fields[b"frame"])
+                if b"frame" in fields:
+                    entries.append({"frame": fields[b"frame"]})
+                elif b"control" in fields:
+                    entries.append({"control": json.loads(fields[b"control"])})
                 last_id = msg_id_str
 
         if last_id != cursor:
             await self._redis.set(cursor_key, last_id, ex=CHANNEL_TTL)
 
-        return frames
+        return entries
+
+    async def _touch_all(self, code: str) -> None:
+        """Reset TTL on all keys for a channel."""
+        pipe = self._redis.pipeline()
+        pipe.expire(_meta_key(code), CHANNEL_TTL)
+        pipe.expire(_stream_key(code, "host"), CHANNEL_TTL)
+        pipe.expire(_stream_key(code, "peer"), CHANNEL_TTL)
+        pipe.expire(_cursor_key(code, "host"), CHANNEL_TTL)
+        pipe.expire(_cursor_key(code, "peer"), CHANNEL_TTL)
+        await pipe.execute()
 
     async def touch(self, code: str) -> None:
         """Reset TTL on channel (keepalive)."""
-        await self._redis.expire(_meta_key(code), CHANNEL_TTL)
-        for role in ("host", "peer"):
-            await self._redis.expire(_cursor_key(code, role), CHANNEL_TTL)
+        await self._touch_all(code)
 
     async def cleanup(self, code: str) -> None:
         """Delete all Redis keys for a channel."""
@@ -840,31 +865,36 @@ async def test_byte_rate_over_limit(limiter):
 
 @pytest.mark.asyncio
 async def test_join_attempts_under_limit(limiter):
-    for _ in range(5):
-        allowed = await limiter.check_join_attempts("test-code")
-        assert allowed is True
+    """Failed join attempts under limit should still allow joins."""
+    for _ in range(4):
+        await limiter.record_failed_join("test-code")
+    allowed = await limiter.check_join_attempts("test-code")
+    assert allowed is True
 
 
 @pytest.mark.asyncio
 async def test_join_attempts_over_limit(limiter):
+    """Too many failed join attempts should block further joins."""
     for _ in range(5):
-        await limiter.check_join_attempts("test-code")
+        await limiter.record_failed_join("test-code")
     allowed = await limiter.check_join_attempts("test-code")
     assert allowed is False
 
 
 @pytest.mark.asyncio
-async def test_channel_count_under_limit(limiter):
-    for i in range(100):
-        await limiter.increment_channel_count("1.2.3.4")
-    allowed = await limiter.check_channel_count("1.2.3.4")
-    assert allowed is False
+async def test_channel_count_atomic_under_limit(limiter):
+    """First channel for an IP should succeed."""
+    allowed = await limiter.check_and_increment_channel_count("1.2.3.4")
+    assert allowed is True
 
 
 @pytest.mark.asyncio
-async def test_channel_count_first_channel(limiter):
-    allowed = await limiter.check_channel_count("1.2.3.4")
-    assert allowed is True
+async def test_channel_count_atomic_over_limit(limiter):
+    """Channel count at limit should reject and not increment."""
+    for _ in range(100):
+        await limiter.check_and_increment_channel_count("1.2.3.4")
+    allowed = await limiter.check_and_increment_channel_count("1.2.3.4")
+    assert allowed is False
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -911,27 +941,36 @@ class RateLimiter:
             await self._redis.expire(key, RATE_WINDOW)
         return count <= BYTE_RATE_LIMIT
 
-    async def check_join_attempts(self, code: str) -> bool:
-        """Check and increment join attempts per code. Returns True if allowed."""
+    async def record_failed_join(self, code: str) -> None:
+        """Record a failed join attempt for a code."""
         key = f"wormhole:{code}:join-attempts"
         count = await self._redis.incr(key)
         if count == 1:
             await self._redis.expire(key, RATE_WINDOW)
-        return count <= JOIN_ATTEMPT_LIMIT
 
-    async def check_channel_count(self, ip: str) -> bool:
-        """Check if IP is under the active channel limit."""
-        key = f"wormhole:ip:{ip}:channels"
+    async def check_join_attempts(self, code: str) -> bool:
+        """Check if a code has too many failed join attempts. Returns True if allowed."""
+        key = f"wormhole:{code}:join-attempts"
         count = await self._redis.get(key)
         if count is None:
             return True
-        return int(count) < CHANNEL_LIMIT_PER_IP
+        return int(count) < JOIN_ATTEMPT_LIMIT
 
-    async def increment_channel_count(self, ip: str) -> None:
-        """Increment active channel count for an IP."""
+    async def check_and_increment_channel_count(self, ip: str) -> bool:
+        """Atomically check and increment channel count for an IP.
+
+        Returns True if under limit (and count was incremented).
+        Returns False if at/over limit (count unchanged).
+        """
         key = f"wormhole:ip:{ip}:channels"
-        await self._redis.incr(key)
-        await self._redis.expire(key, 3600)  # Expire with channel TTL
+        count = await self._redis.incr(key)
+        if count == 1:
+            await self._redis.expire(key, 3600)
+        if count > CHANNEL_LIMIT_PER_IP:
+            # Over limit -- undo the increment
+            await self._redis.decr(key)
+            return False
+        return True
 
     async def decrement_channel_count(self, ip: str) -> None:
         """Decrement active channel count for an IP."""
@@ -1078,6 +1117,9 @@ async def health():
         return {"status": "ok", "redis": "disconnected"}
 
 
+MAX_FRAME_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
 @app.websocket("/ws")
 async def websocket_handler(ws: WebSocket):
     await ws.accept()
@@ -1087,6 +1129,7 @@ async def websocket_handler(ws: WebSocket):
 
     code: str | None = None
     role: str | None = None
+    joined_ok = False
     client_ip = ws.client.host if ws.client else "unknown"
 
     try:
@@ -1118,16 +1161,8 @@ async def websocket_handler(ws: WebSocket):
             await ws.close()
             return
 
-        # Rate limit: join attempts per code
-        if not await limiter.check_join_attempts(code):
-            await ws.send_text(
-                json.dumps({"type": "error", "message": "rate limited"})
-            )
-            await ws.close()
-            return
-
-        # Rate limit: channels per IP
-        if not await limiter.check_channel_count(client_ip):
+        # Rate limit: channels per IP (atomic check-and-increment)
+        if not await limiter.check_and_increment_channel_count(client_ip):
             await ws.send_text(
                 json.dumps({"type": "error", "message": "too many channels"})
             )
@@ -1137,21 +1172,30 @@ async def websocket_handler(ws: WebSocket):
         # Atomic join
         ok = await mgr.join(code, role)
         if not ok:
+            # Only count failed join attempts (not successful ones)
+            await limiter.record_failed_join(code)
+            await limiter.decrement_channel_count(client_ip)
             await ws.send_text(
                 json.dumps({"type": "error", "message": "unable to join channel"})
             )
             await ws.close()
             return
 
-        await limiter.increment_channel_count(client_ip)
+        joined_ok = True
+
+        # Check if too many failed join attempts on this code
+        if not await limiter.check_join_attempts(code):
+            await ws.send_text(
+                json.dumps({"type": "error", "message": "rate limited"})
+            )
+            await ws.close()
+            return
 
         # Check if paired
         if await mgr.is_paired(code):
             await ws.send_text(
                 json.dumps({"type": "status", "event": "paired"})
             )
-            # Notify the other side if they're connected via a stream message
-            # (The other side's writer loop will pick up paired status from meta)
         else:
             await ws.send_text(
                 json.dumps({"type": "status", "event": "waiting"})
@@ -1168,7 +1212,7 @@ async def websocket_handler(ws: WebSocket):
     except Exception:
         logger.exception("WebSocket handler error")
     finally:
-        if code and role:
+        if joined_ok and code and role:
             await mgr.disconnect(code, role)
             await limiter.decrement_channel_count(client_ip)
 
@@ -1183,6 +1227,12 @@ async def _ws_reader(
     """Read binary frames from WebSocket, push to Redis Stream."""
     while True:
         data = await ws.receive_bytes()
+
+        if len(data) > MAX_FRAME_SIZE:
+            await ws.send_text(
+                json.dumps({"type": "error", "message": "frame too large"})
+            )
+            continue
 
         if not await limiter.check_message_rate(code):
             await ws.send_text(
@@ -1205,20 +1255,18 @@ async def _ws_writer(
     code: str,
     role: str,
 ) -> None:
-    """Read frames from Redis Stream, send to WebSocket."""
+    """Read entries from Redis Stream, send to WebSocket."""
     while True:
-        frames = await mgr.read_frames(code, role, block_ms=1000)
+        entries = await mgr.read_frames(code, role, block_ms=1000)
 
-        if not frames:
-            # Check if peer just connected (transition from waiting to paired)
-            if await mgr.is_paired(code):
-                # Send paired notification in case the other side just joined
-                # (idempotent -- client ignores duplicate paired events)
-                pass
+        if not entries:
             continue
 
-        for frame in frames:
-            await ws.send_bytes(frame)
+        for entry in entries:
+            if "frame" in entry:
+                await ws.send_bytes(entry["frame"])
+            elif "control" in entry:
+                await ws.send_text(json.dumps(entry["control"]))
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
