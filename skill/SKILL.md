@@ -1,6 +1,7 @@
 ---
 name: agent-wormhole
 description: Open a secure ephemeral channel to communicate with another Claude Code instance. Use when you need to send or receive messages, credentials, or files to/from another AI agent session.
+argument-hint: "<action> (host, connect <code>@<hostname>)"
 ---
 
 # Agent Wormhole
@@ -15,7 +16,11 @@ Secure, encrypted communication channel between two Claude Code instances.
 
 Start a channel and share the code with the other instance:
 
-1. Start the channel using Monitor:
+1. Determine the hostname of this machine:
+   ```bash
+   hostname
+   ```
+2. Start the channel using Monitor:
    ```
    Monitor(
      command="agent-wormhole host",
@@ -23,12 +28,18 @@ Start a channel and share the code with the other instance:
      persistent=True
    )
    ```
-2. The first notification will contain the channel code:
+3. The first notification will contain the channel code:
    `{"type":"status","event":"channel","code":"<port>-<word>-<word>-<word>"}`
-3. Tell the user the code so they can provide it to the other Claude instance.
-4. Wait for `{"type":"status","event":"connected"}` before sending messages.
+4. Tell the user to give the other Claude session this ready-to-paste command:
+   ```
+   /agent-wormhole connect <code>@<hostname>
+   ```
+   where `<hostname>` is this machine's hostname from step 1. This gives the other agent a single copy-paste command to connect.
+5. Wait for `{"type":"status","event":"connected"}` before sending messages.
 
 ## Connecting to a Channel (you received a code)
+
+If invoked as `/agent-wormhole connect <code>@<hostname>`, parse the target from the argument.
 
 1. Start listening using Monitor:
    ```
@@ -39,6 +50,7 @@ Start a channel and share the code with the other instance:
    )
    ```
 2. Wait for `{"type":"status","event":"connected"}`.
+3. Tell the user you're connected and ready to send/receive.
 
 ## Sending Messages
 
