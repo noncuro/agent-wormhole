@@ -75,9 +75,12 @@ Per connected client, two concurrent async tasks:
 ```
 wormhole:{code}:meta          -- Hash {host_connected, peer_connected, created_at, last_activity}
                                  TTL: 1 hour (reset on activity)
-wormhole:{code}:host-to-peer  -- Stream: frames from host to peer
-wormhole:{code}:peer-to-host  -- Stream: frames from peer to host
+wormhole:{code}:host-to-peer  -- Stream: frames from host to peer (MAXLEN ~1000)
+wormhole:{code}:peer-to-host  -- Stream: frames from peer to host (MAXLEN ~1000)
+wormhole:{code}:host:cursor   -- String: last-read stream ID for host's reader (TTL matches meta)
+wormhole:{code}:peer:cursor   -- String: last-read stream ID for peer's reader (TTL matches meta)
 wormhole:{code}:rate          -- Counter for sliding window rate limiting, TTL 60s
+wormhole:{code}:bytes         -- Counter for byte-rate limiting, TTL 60s
 ```
 
 ### Channel lifecycle
@@ -87,13 +90,23 @@ wormhole:{code}:rate          -- Counter for sliding window rate limiting, TTL 6
 3. **Active**: Frames flow bidirectionally through Redis Streams
 4. **Keepalive**: WebSocket pings every 30s reset the TTL on the meta key
 5. **Expiry**: Channels expire after **1 hour of inactivity**. Redis TTL on the meta key handles this. A background task runs every 5 minutes to delete orphaned streams whose meta key has expired.
-6. **Disconnect**: One side drops -- other side notified. Channel stays alive for reconnection until TTL expires. On reconnect, the client sends a new `join` message with the same code and role. The relay resumes streaming from the client's last-read position in the Redis Stream (tracked by the relay per-client via `XREAD` cursor). No re-handshake is needed at the relay level, but if the SPAKE2 handshake was interrupted, clients must restart it (the handshake messages are still in the stream).
+6. **Disconnect**: One side drops -- other side notified. Channel stays alive for reconnection until TTL expires. On reconnect, the client sends a new `join` message with the same code and role. The relay resumes streaming from the client's last-read position, which is **persisted in Redis** at `wormhole:{code}:{role}:cursor` (updated after each successful WebSocket send). No re-handshake is needed at the relay level, but if the SPAKE2 handshake was interrupted, clients must restart it (the handshake messages are still in the stream).
 
 ### Rate limiting
 
 - **60 messages/minute per channel** -- sliding window counter in Redis. Excess messages rejected with a JSON error frame.
+- **50 MB/minute per channel** -- byte-rate limit prevents bandwidth abuse even with large frames. Tracked via separate Redis counter.
 - **100 active channels per source IP** -- prevents resource exhaustion from a single actor. Checked at join time.
+- **5 failed join attempts per code per minute** -- prevents brute-force role claiming. Tracked per code, not per IP.
 - **10 MB max frame size** -- matches existing client-side limit.
+
+### Stream backpressure
+
+- Streams are capped at `MAXLEN ~1000` (approximate trimming for performance). If a client falls behind by more than 1000 messages, older frames are lost and the client should treat this as a fatal error and restart the session.
+
+### Atomic join
+
+Role registration uses a Redis Lua script to atomically check-and-set the role in the meta hash. This prevents race conditions when multiple relay instances handle simultaneous join requests for the same code and role.
 
 ## Client Changes
 
@@ -182,13 +195,13 @@ src/agent_wormhole/
 
 - **Relay unreachable**: Client retries with exponential backoff (3 attempts), then fails with clear error message suggesting `--direct` mode
 - **Redis down**: Relay health check reports unhealthy, returns 503. Active WebSocket connections get an error frame and are closed.
-- **Duplicate role**: If a second host tries to join a code that already has a host, relay rejects with `{"type":"error","message":"role already taken"}`
-- **Invalid code**: Relay rejects with `{"type":"error","message":"invalid code format"}`
+- **Duplicate role / invalid code**: Relay rejects with a generic `{"type":"error","message":"unable to join channel"}` to avoid leaking whether a code exists or which role is taken.
 
 ## Security considerations
 
 - Relay is zero-knowledge about message content (E2E encrypted via SPAKE2 + AES-256-GCM)
-- Code entropy: 3 words from 256-word list = ~24 bits. Sufficient for ephemeral channels with 1-hour TTL. Brute-force at 60 msg/min rate limit would take ~19 days per code.
-- Rate limiting and per-IP channel limits prevent resource exhaustion
-- No authentication required (public service), abuse mitigated through rate limits
+- Code entropy: 3 words from 256-word list = ~24 bits. Sufficient for ephemeral channels with 1-hour TTL. Even if an attacker guesses a valid code, SPAKE2 ensures they cannot derive the session keys without knowing the code -- a wrong guess produces a failed handshake, not a silent compromise.
+- Rate limiting (message, byte, join-attempt) and per-IP channel limits prevent resource exhaustion and brute-force role claiming
+- Generic error messages on join failure prevent code/role enumeration
+- No authentication required (public service), abuse mitigated through layered rate limits
 - WebSocket connections use TLS (wss://) for transport-level encryption on top of E2E encryption
