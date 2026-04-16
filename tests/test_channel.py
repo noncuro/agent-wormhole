@@ -21,6 +21,7 @@ class TestEndToEnd:
                 output=host_output,
                 timeout=5.0,
                 on_code=lambda c: code_future.set_result(c),
+                direct=True,
             )
 
         host = asyncio.create_task(host_with_code())
@@ -60,6 +61,7 @@ class TestEndToEnd:
             await run_host(
                 port=0, output=host_output, timeout=5.0,
                 on_code=lambda c: code_future.set_result(c),
+                direct=True,
             )
 
         host = asyncio.create_task(host_with_code())

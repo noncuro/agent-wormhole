@@ -23,7 +23,8 @@ async def test_full_text_roundtrip(tmp_base):
 
     async def run_h():
         await run_host(port=0, output=host_out, timeout=5.0,
-                       on_code=lambda c: code_future.set_result(c), base=tmp_base)
+                       on_code=lambda c: code_future.set_result(c), base=tmp_base,
+                       direct=True)
 
     host_task = asyncio.create_task(run_h())
     code = await asyncio.wait_for(code_future, timeout=5.0)
@@ -62,7 +63,8 @@ async def test_file_transfer(tmp_base):
 
     async def run_h():
         await run_host(port=0, output=host_out, timeout=5.0,
-                       on_code=lambda c: code_future.set_result(c), base=tmp_base)
+                       on_code=lambda c: code_future.set_result(c), base=tmp_base,
+                       direct=True)
 
     host_task = asyncio.create_task(run_h())
     code = await asyncio.wait_for(code_future, timeout=5.0)
@@ -102,7 +104,8 @@ async def test_large_text_saved_to_file(tmp_base):
 
     async def run_h():
         await run_host(port=0, output=host_out, timeout=5.0,
-                       on_code=lambda c: code_future.set_result(c), base=tmp_base)
+                       on_code=lambda c: code_future.set_result(c), base=tmp_base,
+                       direct=True)
 
     host_task = asyncio.create_task(run_h())
     code = await asyncio.wait_for(code_future, timeout=5.0)

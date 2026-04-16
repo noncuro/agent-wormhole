@@ -1,3 +1,4 @@
+"""Channel logic: handshake, send/receive loops."""
 from __future__ import annotations
 
 import asyncio
@@ -8,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Callable, TextIO
 
+from agent_wormhole.config import get_relay_url
 from agent_wormhole.crypto import Handshake, SessionKeys, decrypt, encrypt
 from agent_wormhole.fs import (
     DEFAULT_BASE,
@@ -18,14 +20,9 @@ from agent_wormhole.fs import (
     safe_save_file,
     safe_save_text,
 )
-from agent_wormhole.protocol import (
-    FrameTooLargeError,
-    make_version_message,
-    parse_message,
-    read_frame,
-    write_frame,
-)
-from agent_wormhole.wordlist import generate_code, parse_code
+from agent_wormhole.protocol import make_version_message, parse_message
+from agent_wormhole.transport import DirectTransport, RelayTransport, Transport
+from agent_wormhole.wordlist import generate_code, generate_relay_code, parse_code
 
 TEXT_STDOUT_LIMIT = 1024  # 1KB
 
@@ -37,29 +34,28 @@ def _emit(output: TextIO, data: dict) -> None:
 
 
 async def _do_handshake(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
+    transport: Transport,
     password: bytes,
     is_host: bool,
 ) -> SessionKeys:
-    """Perform SPAKE2 handshake over the TCP connection."""
+    """Perform SPAKE2 handshake over the transport."""
     if is_host:
         hs = Handshake.host(password)
     else:
         hs = Handshake.peer(password)
 
     my_msg = hs.start()
-    await write_frame(writer, my_msg)
-    their_msg = await read_frame(reader)
+    await transport.send_frame(my_msg)
+    their_msg = await transport.recv_frame()
     keys = hs.finish(their_msg)
 
     # Version exchange
     role = "host" if is_host else "peer"
     version_msg = make_version_message(role).encode()
     encrypted = encrypt(keys, version_msg, sending=True)
-    await write_frame(writer, encrypted)
+    await transport.send_frame(encrypted)
 
-    their_version_enc = await read_frame(reader)
+    their_version_enc = await transport.recv_frame()
     their_version_raw = decrypt(keys, their_version_enc, receiving=True).decode()
     their_version = json.loads(their_version_raw)
 
@@ -72,12 +68,12 @@ async def _do_handshake(
 async def _outbox_watcher(
     code: str,
     keys: SessionKeys,
-    writer: asyncio.StreamWriter,
+    transport: Transport,
     *,
     role: str,
     base: Path = DEFAULT_BASE,
 ) -> None:
-    """Poll the outbox file and send new messages over the wire."""
+    """Poll the outbox file and send new messages over the transport."""
     outbox_path = get_outbox_path(code, role=role, base=base)
     last_pos = 0
 
@@ -109,21 +105,21 @@ async def _outbox_watcher(
                 wire_msg = line
 
             encrypted = encrypt(keys, wire_msg.encode(), sending=True)
-            await write_frame(writer, encrypted)
+            await transport.send_frame(encrypted)
 
 
 async def _receiver(
     code: str,
     keys: SessionKeys,
-    reader: asyncio.StreamReader,
+    transport: Transport,
     output: TextIO,
     *,
     base: Path = DEFAULT_BASE,
 ) -> None:
-    """Read incoming messages from TCP, decrypt, and print to stdout."""
+    """Read incoming messages from transport, decrypt, and print to stdout."""
     while True:
         try:
-            encrypted = await read_frame(reader)
+            encrypted = await transport.recv_frame()
         except (asyncio.IncompleteReadError, ConnectionError):
             _emit(output, {"type": "status", "event": "disconnected"})
             return
@@ -131,7 +127,6 @@ async def _receiver(
         try:
             raw = decrypt(keys, encrypted, receiving=True).decode()
         except Exception:
-            # Decrypt failure means nonce desync or tampered data — channel is broken
             _emit(output, {"type": "status", "event": "error", "detail": "decryption failed, closing channel"})
             return
 
@@ -152,65 +147,95 @@ async def _receiver(
             _emit(output, {"type": "file", "name": name, "saved_to": str(path), "size": len(file_data)})
 
 
-async def run_host(
-    port: int = 0,
-    output: TextIO = sys.stdout,
-    timeout: float | None = None,
-    on_code: Callable[[str], None] | None = None,
-    base: Path = DEFAULT_BASE,
+async def _run_channel(
+    transport: Transport,
+    code: str,
+    role: str,
+    output: TextIO,
+    base: Path,
 ) -> None:
-    """Host a channel: listen, handshake, then run send/receive loops."""
-    # Bind first, then generate code with the actual port (avoids race condition)
-    connected: asyncio.Future[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = asyncio.Future()
-
-    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        if not connected.done():
-            connected.set_result((reader, writer))
-
-    server = await asyncio.start_server(handle_client, "0.0.0.0", port)
-    actual_port = server.sockets[0].getsockname()[1]
-    code = generate_code(port=actual_port)
-    channel_dir = init_channel_dir(code, role="host", base=base)
-
-    _emit(output, {"type": "status", "event": "channel", "code": code})
-    _emit(output, {"type": "status", "event": "waiting"})
-
-    if on_code:
-        on_code(code)
-
+    """Common logic: handshake then run send/receive loops."""
     try:
-        if timeout:
-            reader, writer = await asyncio.wait_for(connected, timeout=timeout)
-        else:
-            reader, writer = await connected
-    except asyncio.TimeoutError:
-        server.close()
-        _emit(output, {"type": "status", "event": "timeout"})
-        cleanup_channel(code, base=base)
-        return
-
-    # Stop accepting new connections (single-use)
-    server.close()
-
-    try:
-        keys = await _do_handshake(reader, writer, code.encode(), is_host=True)
+        keys = await _do_handshake(transport, code.encode(), is_host=(role == "host"))
     except Exception as e:
         _emit(output, {"type": "status", "event": "handshake_failed", "detail": str(e)})
-        writer.close()
+        await transport.close()
         cleanup_channel(code, base=base)
         return
 
     _emit(output, {"type": "status", "event": "connected"})
 
     try:
-        # Run outbox watcher and receiver concurrently
         await asyncio.gather(
-            _outbox_watcher(code, keys, writer, role="host", base=base),
-            _receiver(code, keys, reader, output, base=base),
+            _outbox_watcher(code, keys, transport, role=role, base=base),
+            _receiver(code, keys, transport, output, base=base),
         )
     finally:
-        writer.close()
+        await transport.close()
         cleanup_channel(code, base=base)
+
+
+async def run_host(
+    port: int = 0,
+    output: TextIO = sys.stdout,
+    timeout: float | None = None,
+    on_code: Callable[[str], None] | None = None,
+    base: Path = DEFAULT_BASE,
+    *,
+    relay_url: str | None = None,
+    direct: bool = False,
+) -> None:
+    """Host a channel: listen, handshake, then run send/receive loops.
+
+    By default uses relay mode. Pass direct=True for legacy TCP mode.
+    """
+    if direct:
+        # Legacy direct TCP mode
+        transport = DirectTransport.as_host(port=port)
+        await transport.connect()  # Starts listening, returns immediately
+        code = generate_code(port=transport.port)
+        init_channel_dir(code, role="host", base=base)
+
+        _emit(output, {"type": "status", "event": "channel", "code": code})
+        _emit(output, {"type": "status", "event": "waiting"})
+
+        if on_code:
+            on_code(code)
+
+        # Wait for peer to connect
+        try:
+            await transport.accept(timeout=timeout)
+        except asyncio.TimeoutError:
+            _emit(output, {"type": "status", "event": "timeout"})
+            await transport.close()
+            cleanup_channel(code, base=base)
+            return
+
+        await _run_channel(transport, code, "host", output, base)
+    else:
+        # Relay mode
+        code = generate_relay_code()
+        init_channel_dir(code, role="host", base=base)
+
+        _emit(output, {"type": "status", "event": "channel", "code": code})
+
+        if on_code:
+            on_code(code)
+
+        url = get_relay_url(relay_url)
+        transport = RelayTransport(url, code, "host")
+
+        try:
+            await transport.connect()
+        except Exception as e:
+            _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
+            cleanup_channel(code, base=base)
+            return
+
+        status_event = transport.status.get("event", "waiting")
+        _emit(output, {"type": "status", "event": status_event})
+
+        await _run_channel(transport, code, "host", output, base)
 
 
 async def run_peer(
@@ -218,44 +243,43 @@ async def run_peer(
     output: TextIO = sys.stdout,
     timeout: float | None = None,
     base: Path = DEFAULT_BASE,
+    *,
+    relay_url: str | None = None,
 ) -> None:
     """Connect to a hosted channel, handshake, then run send/receive loops."""
     port, code, hostname = parse_code(target)
-    if not hostname:
-        raise ValueError("Target must include hostname: <code>@<hostname>")
 
-    channel_dir = init_channel_dir(code, role="peer", base=base)
+    if port is not None:
+        # Direct mode (has port prefix and hostname)
+        if not hostname:
+            raise ValueError("Direct-mode target must include hostname: <code>@<hostname>")
 
-    try:
-        if timeout:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(hostname, port), timeout=timeout
-            )
-        else:
-            reader, writer = await asyncio.open_connection(hostname, port)
-    except Exception as e:
-        _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
-        cleanup_channel(code, base=base)
-        return
+        init_channel_dir(code, role="peer", base=base)
+        transport = DirectTransport.as_peer(hostname=hostname, port=port)
 
-    try:
-        keys = await _do_handshake(reader, writer, code.encode(), is_host=False)
-    except Exception as e:
-        _emit(output, {"type": "status", "event": "handshake_failed", "detail": str(e)})
-        writer.close()
-        cleanup_channel(code, base=base)
-        return
+        try:
+            if timeout:
+                await asyncio.wait_for(transport.connect(), timeout=timeout)
+            else:
+                await transport.connect()
+        except Exception as e:
+            _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
+            cleanup_channel(code, base=base)
+            return
+    else:
+        # Relay mode (3-word code, no port)
+        init_channel_dir(code, role="peer", base=base)
+        url = get_relay_url(relay_url)
+        transport = RelayTransport(url, code, "peer")
 
-    _emit(output, {"type": "status", "event": "connected"})
+        try:
+            await transport.connect()
+        except Exception as e:
+            _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
+            cleanup_channel(code, base=base)
+            return
 
-    try:
-        await asyncio.gather(
-            _outbox_watcher(code, keys, writer, role="peer", base=base),
-            _receiver(code, keys, reader, output, base=base),
-        )
-    finally:
-        writer.close()
-        cleanup_channel(code, base=base)
+    await _run_channel(transport, code, "peer", output, base)
 
 
 def send_to_outbox(
