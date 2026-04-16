@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 
 import typer
 
@@ -9,15 +10,22 @@ app = typer.Typer(name="agent-wormhole", help="Secure ephemeral channels for AI 
 
 
 @app.command()
-def host(port: int = typer.Option(0, help="Port to listen on (0 = random)")):
+def host(
+    port: int = typer.Option(0, help="Port to listen on (0 = random, only used with --direct)"),
+    direct: bool = typer.Option(False, "--direct", help="Use direct TCP mode instead of relay"),
+    relay: Optional[str] = typer.Option(None, "--relay", help="Custom relay URL (overrides default)"),
+):
     """Host a new channel and wait for a peer to connect."""
-    asyncio.run(run_host(port=port))
+    asyncio.run(run_host(port=port, direct=direct, relay_url=relay))
 
 
 @app.command()
-def connect(target: str = typer.Argument(help="<code>@<hostname> to connect to")):
+def connect(
+    target: str = typer.Argument(help="Channel code (relay) or <code>@<hostname> (direct)"),
+    relay: Optional[str] = typer.Option(None, "--relay", help="Custom relay URL (overrides default)"),
+):
     """Connect to an existing channel."""
-    asyncio.run(run_peer(target))
+    asyncio.run(run_peer(target, relay_url=relay))
 
 
 @app.command()
