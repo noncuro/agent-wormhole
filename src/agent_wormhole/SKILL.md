@@ -10,23 +10,26 @@ Secure, encrypted communication channel between two Claude Code instances.
 
 ## Prerequisites
 
-`agent-wormhole` must be installed. Check if it's available:
+`agent-wormhole` must be installed and this skill must be set up. Check both:
 
 ```bash
 agent-wormhole --help
 ```
 
-If not installed, install it:
+If not installed:
 
 ```bash
 pip install agent-wormhole
+# or: uv tool install agent-wormhole
 ```
 
-Or with uv:
+If this skill isn't yet in `~/.claude/skills/agent-wormhole/`, run the setup command and it will print step-by-step instructions for you to follow:
 
 ```bash
-uv tool install agent-wormhole
+agent-wormhole setup
 ```
+
+**Note:** This skill requires the Monitor tool, built into Claude Code since v2.1.98. If Monitor isn't available, run `claude update`.
 
 ## Hosting a Channel (you are the initiator)
 
@@ -90,6 +93,12 @@ Messages arrive as Monitor notifications (JSON lines):
 - **Text**: `{"type":"text","body":"the message"}`
 - **Large text** (>1KB): `{"type":"text","saved_to":"/tmp/agent-wormhole/messages/123.txt","size":4096}` -- use Read tool to get the content
 - **File**: `{"type":"file","name":"config.json","saved_to":"/tmp/agent-wormhole/files/config.json","size":2048}` -- use Read tool to get the file
+
+When displaying messages to the user, format them clearly so both sides of the conversation are easy to distinguish:
+
+- Incoming messages: **Peer says:** `<message>`
+- Outgoing messages (after sending): **Sent:** `<message>`
+- Status events: display inline, e.g. `[connected]`, `[peer disconnected]`
 
 ## Channel Limits
 

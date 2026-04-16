@@ -1,5 +1,19 @@
 # TODO
 
+## Add sender identity to message frames
+
+Currently received frames look like `{"type":"text","body":"..."}` with no indication of
+who sent them. In a long back-and-forth the two streams visually merge.
+
+Suggested: add a `"from"` field to every received frame:
+```json
+{"type":"text","from":"peer","body":"..."}    // received from the other side
+{"type":"text","from":"self","body":"..."}    // echo of something this side sent
+```
+
+Echoing self-sent messages into the output stream would also help — currently sends
+are silent so the log only shows half the conversation.
+
 ## Claude Code Plugin Support
 
 The repo could be structured as a native Claude Code plugin, enabling auto-discovery

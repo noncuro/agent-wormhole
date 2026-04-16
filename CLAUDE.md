@@ -33,3 +33,7 @@ uv run pytest            # run tests
 - `src/agent_wormhole/` — core library (CLI, crypto, channel logic)
 - `skill/` — Claude Code skill definition
 - `tests/` — pytest tests
+
+## Notes
+
+- The skill uses the **Monitor** tool (built-in since Claude Code v2.1.98). If Monitor is not available, update Claude Code (`claude update`). Monitor is required for real-time message delivery — there is no fallback path.
