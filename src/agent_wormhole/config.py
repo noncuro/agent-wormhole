@@ -1,7 +1,7 @@
 """Configuration for agent-wormhole."""
 import os
 
-DEFAULT_RELAY_URL = "wss://agent-wormhole-relay.up.railway.app"
+DEFAULT_RELAY_URL = "wss://relay-production-940a.up.railway.app"
 
 
 def get_relay_url(override: str | None = None) -> str:
