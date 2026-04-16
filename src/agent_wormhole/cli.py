@@ -1,6 +1,6 @@
 import asyncio
+import importlib.resources as importlib_resources
 import os
-from importlib.resources import files
 from typing import Optional
 
 import typer
@@ -87,9 +87,17 @@ def setup():
         typer.echo("  agent-wormhole setup | claude")
         raise typer.Exit(0)
 
-    # Inside Claude Code or piped to claude — print the skill content for Claude to save
-    source = files("agent_wormhole").joinpath("SKILL.md")
-    content = source.read_text()
-    typer.echo("Save the following content to ~/.claude/skills/agent-wormhole/SKILL.md")
+    # Resolve the actual path to the installed SKILL.md
+    source = importlib_resources.files("agent_wormhole").joinpath("SKILL.md")
+    with importlib_resources.as_file(source) as skill_path:
+        skill_path_str = str(skill_path)
+
+    skill_dir = "~/.claude/skills/agent-wormhole"
+    skill_dest = f"{skill_dir}/SKILL.md"
+
+    typer.echo(f"Please run these shell commands to set up the agent-wormhole skill:")
     typer.echo()
-    typer.echo(content)
+    typer.echo(f"  mkdir -p {skill_dir}")
+    typer.echo(f"  ln -sf {skill_path_str} {skill_dest}")
+    typer.echo()
+    typer.echo("This symlinks the skill from the installed package so it updates automatically when you upgrade agent-wormhole.")
