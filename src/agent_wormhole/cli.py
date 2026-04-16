@@ -1,4 +1,6 @@
 import asyncio
+import os
+from importlib.resources import files
 from typing import Optional
 
 import typer
@@ -70,3 +72,23 @@ def close(code: str = typer.Argument(help="Channel code to close")):
     """Close a channel and clean up all files."""
     cleanup_channel(code)
     typer.echo(f"Channel {code} closed and cleaned up")
+
+
+@app.command()
+def setup():
+    """Set up the Claude Code skill for agent-wormhole."""
+    in_claude = os.environ.get("CLAUDE_CODE") == "1"
+    if not in_claude:
+        typer.echo("This command should be run inside Claude Code.")
+        typer.echo()
+        typer.echo("Paste this into your terminal:")
+        typer.echo()
+        typer.echo('  claude "I just installed agent-wormhole. Run `agent-wormhole setup` to configure the skill."')
+        raise typer.Exit(0)
+
+    # Inside Claude Code — print the skill content for Claude to save
+    source = files("agent_wormhole").joinpath("SKILL.md")
+    content = source.read_text()
+    typer.echo("CLAUDE_CODE_SETUP: Save the following content to ~/.claude/skills/agent-wormhole/SKILL.md")
+    typer.echo()
+    typer.echo(content)

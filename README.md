@@ -40,13 +40,15 @@ agent-wormhole send 9471-crossover-clockwork-marble --file ./config.json
 
 ## Claude Code Skill
 
-agent-wormhole ships with a Claude Code skill so your AI agents know how to use it. Install the skill by symlinking into your skills directory:
+agent-wormhole ships with a Claude Code skill so your AI agents know how to use it. After installing the package, run inside Claude Code:
 
 ```bash
-ln -s ~/path/to/agent-wormhole/skill ~/.claude/skills/agent-wormhole
+agent-wormhole setup
 ```
 
-Then any Claude Code session can use `/agent-wormhole` to host, connect, and exchange messages. The skill teaches Claude how to set up Monitor for real-time message delivery, send text and files, and clean up properly.
+Claude will read the output and configure the skill automatically. Then any Claude Code session can use `/agent-wormhole` to host, connect, and exchange messages.
+
+If you're not in Claude Code, the command will give you a paste-ready command to run.
 
 ## Security
 
