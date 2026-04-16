@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from abc import ABC, abstractmethod
+
+from websockets.asyncio.client import connect as ws_connect, ClientConnection
 
 from agent_wormhole.protocol import read_frame, write_frame
 
@@ -111,3 +114,62 @@ class DirectTransport(Transport):
             self._writer.close()
         if self._server:
             self._server.close()
+
+
+class RelayTransport(Transport):
+    """WebSocket transport through a relay server."""
+
+    def __init__(self, relay_url: str, code: str, role: str):
+        self._relay_url = relay_url
+        self._code = code
+        self._role = role
+        self._ws: ClientConnection | None = None
+        self._status: dict = {}
+
+    async def connect(self) -> None:
+        ws_url = self._relay_url.rstrip("/") + "/ws"
+        self._ws = await ws_connect(ws_url)
+        # Send join message
+        join_msg = json.dumps({
+            "action": "join",
+            "code": self._code,
+            "role": self._role,
+        })
+        await self._ws.send(join_msg)
+        # Wait for status response
+        raw = await self._ws.recv(decode=False)
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        status = json.loads(raw)
+        if status.get("type") == "error":
+            raise ConnectionError(
+                f"Relay rejected join: {status.get('message', 'unknown error')}"
+            )
+        self._status = status
+
+    @property
+    def status(self) -> dict:
+        """The join status response from the relay."""
+        return self._status
+
+    async def send_frame(self, data: bytes) -> None:
+        assert self._ws is not None
+        await self._ws.send(data)
+
+    async def recv_frame(self) -> bytes:
+        assert self._ws is not None
+        data = await self._ws.recv(decode=False)
+        if isinstance(data, str):
+            # Could be a JSON control message from relay
+            msg = json.loads(data)
+            if msg.get("type") == "status" and msg.get("event") == "peer_disconnected":
+                raise ConnectionError("Peer disconnected")
+            if msg.get("type") == "error":
+                raise ConnectionError(f"Relay error: {msg.get('message')}")
+            # For paired notifications, recurse to get the next binary frame
+            return await self.recv_frame()
+        return data
+
+    async def close(self) -> None:
+        if self._ws:
+            await self._ws.close()

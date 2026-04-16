@@ -35,3 +35,11 @@ async def test_direct_transport_host_peer_roundtrip():
 @pytest.mark.asyncio
 async def test_direct_transport_is_transport_subclass():
     assert issubclass(DirectTransport, Transport)
+
+
+from agent_wormhole.transport import RelayTransport
+
+
+@pytest.mark.asyncio
+async def test_relay_transport_is_transport_subclass():
+    assert issubclass(RelayTransport, Transport)
