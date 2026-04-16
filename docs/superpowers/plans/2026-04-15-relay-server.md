@@ -94,7 +94,7 @@ dev = [
 
 - [ ] **Step 2: Install dependencies**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv sync`
+Run: `uv sync`
 Expected: all dependencies install successfully
 
 - [ ] **Step 3: Commit**
@@ -197,7 +197,7 @@ def test_parse_code_detects_direct_vs_relay():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_config.py -v`
+Run: `uv run pytest tests/test_config.py -v`
 Expected: FAIL -- `config` module doesn't exist, `generate_relay_code` doesn't exist
 
 - [ ] **Step 3: Create config module**
@@ -290,12 +290,12 @@ def parse_code(target: str) -> tuple[int | None, str, str | None]:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_config.py -v`
+Run: `uv run pytest tests/test_config.py -v`
 Expected: all PASS
 
 - [ ] **Step 6: Run existing tests to check for regressions**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest -v`
+Run: `uv run pytest -v`
 Expected: all PASS (existing tests use `parse_code` with 4-part format which still works)
 
 - [ ] **Step 7: Commit**
@@ -359,7 +359,7 @@ async def test_direct_transport_is_transport_subclass():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_transport.py -v`
+Run: `uv run pytest tests/test_transport.py -v`
 Expected: FAIL -- `transport` module doesn't exist
 
 - [ ] **Step 3: Implement Transport ABC and DirectTransport**
@@ -484,7 +484,7 @@ class DirectTransport(Transport):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_transport.py -v`
+Run: `uv run pytest tests/test_transport.py -v`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
@@ -618,7 +618,7 @@ async def test_cleanup_removes_all_keys(mgr, redis):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_redis.py -v`
+Run: `uv run pytest tests/test_relay_redis.py -v`
 Expected: FAIL -- module doesn't exist
 
 - [ ] **Step 3: Create relay package and RedisManager**
@@ -791,7 +791,7 @@ class RedisManager:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_redis.py -v`
+Run: `uv run pytest tests/test_relay_redis.py -v`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
@@ -899,7 +899,7 @@ async def test_channel_count_atomic_over_limit(limiter):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_rate_limiter.py -v`
+Run: `uv run pytest tests/test_relay_rate_limiter.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement RateLimiter**
@@ -982,7 +982,7 @@ class RateLimiter:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_rate_limiter.py -v`
+Run: `uv run pytest tests/test_relay_rate_limiter.py -v`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
@@ -1058,7 +1058,7 @@ async def test_health_redis_down():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_server.py -v`
+Run: `uv run pytest tests/test_relay_server.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement relay server**
@@ -1271,7 +1271,7 @@ async def _ws_writer(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_server.py -v`
+Run: `uv run pytest tests/test_relay_server.py -v`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
@@ -1307,7 +1307,7 @@ Note: Full E2E relay transport tests are in Task 10 (test_relay_e2e.py) since th
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_transport.py::test_relay_transport_is_transport_subclass -v`
+Run: `uv run pytest tests/test_transport.py::test_relay_transport_is_transport_subclass -v`
 Expected: FAIL -- `RelayTransport` doesn't exist
 
 - [ ] **Step 3: Implement RelayTransport**
@@ -1379,7 +1379,7 @@ class RelayTransport(Transport):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_transport.py -v`
+Run: `uv run pytest tests/test_transport.py -v`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
@@ -1721,7 +1721,7 @@ def send_to_outbox(
 
 - [ ] **Step 2: Run existing integration tests**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_integration.py -v`
+Run: `uv run pytest tests/test_integration.py -v`
 Expected: all PASS. The existing tests use `run_host(port=0, ...)` which now defaults to relay mode, but since there's no relay server running, we need to update them to use `direct=True`.
 
 - [ ] **Step 3: Update integration tests for direct mode**
@@ -1744,7 +1744,7 @@ Apply the same change to `test_file_transfer` and `test_large_text_saved_to_file
 
 - [ ] **Step 4: Run all tests**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest -v`
+Run: `uv run pytest -v`
 Expected: all PASS
 
 - [ ] **Step 5: Commit**
@@ -1842,15 +1842,15 @@ def close(code: str = typer.Argument(help="Channel code to close")):
 
 - [ ] **Step 2: Verify CLI help**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run agent-wormhole host --help`
+Run: `uv run agent-wormhole host --help`
 Expected: shows `--direct` and `--relay` options
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run agent-wormhole connect --help`
+Run: `uv run agent-wormhole connect --help`
 Expected: shows `--relay` option
 
 - [ ] **Step 3: Run all tests**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest -v`
+Run: `uv run pytest -v`
 Expected: all PASS
 
 - [ ] **Step 4: Commit**
@@ -1970,12 +1970,12 @@ async def test_e2e_relay_text_roundtrip(relay_server, tmp_path):
 
 - [ ] **Step 2: Run E2E test**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest tests/test_relay_e2e.py -v`
+Run: `uv run pytest tests/test_relay_e2e.py -v`
 Expected: PASS
 
 - [ ] **Step 3: Run full test suite**
 
-Run: `cd /Users/cahnd/Documents/GitHub/agent-wormhole && uv run pytest -v`
+Run: `uv run pytest -v`
 Expected: all PASS
 
 - [ ] **Step 4: Commit**
@@ -2190,14 +2190,14 @@ railway login  # if not already authenticated
 
 Then use `mcp__Railway__create-project-and-link` with:
 - projectName: "agent-wormhole-relay"
-- workspacePath: "/Users/cahnd/Documents/GitHub/agent-wormhole"
+- workspacePath: "."
 
 - [ ] **Step 2: Add Redis service**
 
 Add Redis via Railway dashboard or template. Set `REDIS_URL` variable on the relay service referencing `${{Redis.REDIS_URL}}`.
 
 Use `mcp__Railway__set-variables` with:
-- workspacePath: "/Users/cahnd/Documents/GitHub/agent-wormhole"
+- workspacePath: "."
 - variables: `REDIS_URL=${{Redis.REDIS_URL}}`
 
 - [ ] **Step 3: Generate public domain**

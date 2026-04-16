@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-15
 **Status**: Draft
-**Repo**: `~/Documents/GitHub/agent-wormhole` (new, open source)
+**Repo**: `.` (this repo, open source)
 
 ## Overview
 

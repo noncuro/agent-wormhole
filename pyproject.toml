@@ -5,6 +5,14 @@ description = "Secure ephemeral channels for AI agent communication"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
+authors = [{ name = "Daniel", email = "daniel@slingshot.xyz" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Communications",
+    "Topic :: Security :: Cryptography",
+]
+
 dependencies = [
     "typer>=0.9",
     "spake2>=0.9",
@@ -14,6 +22,11 @@ dependencies = [
     "websockets>=14.0",
     "redis>=5.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/noncuro/agent-wormhole"
+Repository = "https://github.com/noncuro/agent-wormhole"
+Issues = "https://github.com/noncuro/agent-wormhole/issues"
 
 [project.scripts]
 agent-wormhole = "agent_wormhole.cli:app"

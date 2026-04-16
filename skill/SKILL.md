@@ -19,13 +19,13 @@ agent-wormhole --help
 If not installed, install it:
 
 ```bash
-pip install git+https://github.com/noncuro/agent-wormhole.git
+pip install agent-wormhole
 ```
 
 Or with uv:
 
 ```bash
-uv tool install git+https://github.com/noncuro/agent-wormhole.git
+uv tool install agent-wormhole
 ```
 
 ## Hosting a Channel (you are the initiator)

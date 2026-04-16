@@ -13,8 +13,8 @@ The `agent-wormhole` CLI must be installed for the `/agent-wormhole` skill to wo
 agent-wormhole --help
 
 # Install (pick one)
-pip install git+https://github.com/noncuro/agent-wormhole.git
-uv tool install git+https://github.com/noncuro/agent-wormhole.git
+pip install agent-wormhole
+uv tool install agent-wormhole
 ```
 
 The skill file at `skill/SKILL.md` should be symlinked or copied into `~/.claude/skills/agent-wormhole/SKILL.md` so Claude Code sessions can use `/agent-wormhole`.
