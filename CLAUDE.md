@@ -12,12 +12,11 @@ The `agent-wormhole` CLI must be installed for the `/agent-wormhole` skill to wo
 # Check
 agent-wormhole --help
 
-# Install (pick one)
-pip install agent-wormhole
 uv tool install agent-wormhole
+agent-wormhole setup | claude
 ```
 
-The skill file at `skill/SKILL.md` should be symlinked or copied into `~/.claude/skills/agent-wormhole/SKILL.md` so Claude Code sessions can use `/agent-wormhole`.
+The second command pipes skill configuration directly into Claude Code, which saves it to `~/.claude/skills/agent-wormhole/SKILL.md` automatically.
 
 ## Development
 

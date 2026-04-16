@@ -77,18 +77,19 @@ def close(code: str = typer.Argument(help="Channel code to close")):
 @app.command()
 def setup():
     """Set up the Claude Code skill for agent-wormhole."""
+    import sys
     in_claude = os.environ.get("CLAUDE_CODE") == "1"
-    if not in_claude:
-        typer.echo("This command should be run inside Claude Code.")
+    is_piped = not sys.stdout.isatty()
+
+    if not in_claude and not is_piped:
+        typer.echo("This command should be run inside Claude Code, or pipe it directly:")
         typer.echo()
-        typer.echo("Paste this into your terminal:")
-        typer.echo()
-        typer.echo('  claude "I just installed agent-wormhole. Run `agent-wormhole setup` to configure the skill."')
+        typer.echo("  agent-wormhole setup | claude")
         raise typer.Exit(0)
 
-    # Inside Claude Code — print the skill content for Claude to save
+    # Inside Claude Code or piped to claude — print the skill content for Claude to save
     source = files("agent_wormhole").joinpath("SKILL.md")
     content = source.read_text()
-    typer.echo("CLAUDE_CODE_SETUP: Save the following content to ~/.claude/skills/agent-wormhole/SKILL.md")
+    typer.echo("Save the following content to ~/.claude/skills/agent-wormhole/SKILL.md")
     typer.echo()
     typer.echo(content)
