@@ -235,7 +235,18 @@ async def run_host(
         status_event = transport.status.get("event", "waiting")
         _emit(output, {"type": "status", "event": status_event})
 
-        await _run_channel(transport, code, "host", output, base)
+        try:
+            if timeout:
+                await asyncio.wait_for(
+                    _run_channel(transport, code, "host", output, base),
+                    timeout=timeout,
+                )
+            else:
+                await _run_channel(transport, code, "host", output, base)
+        except asyncio.TimeoutError:
+            _emit(output, {"type": "status", "event": "timeout"})
+            await transport.close()
+            cleanup_channel(code, base=base)
 
 
 async def run_peer(
@@ -279,7 +290,18 @@ async def run_peer(
             cleanup_channel(code, base=base)
             return
 
-    await _run_channel(transport, code, "peer", output, base)
+    try:
+        if timeout:
+            await asyncio.wait_for(
+                _run_channel(transport, code, "peer", output, base),
+                timeout=timeout,
+            )
+        else:
+            await _run_channel(transport, code, "peer", output, base)
+    except asyncio.TimeoutError:
+        _emit(output, {"type": "status", "event": "timeout"})
+        await transport.close()
+        cleanup_channel(code, base=base)
 
 
 def send_to_outbox(

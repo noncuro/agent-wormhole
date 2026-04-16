@@ -44,6 +44,15 @@ async def test_join_duplicate_role_rejected(mgr):
 
 
 @pytest.mark.asyncio
+async def test_join_peer_without_host_rejected(mgr):
+    """Peers cannot join a channel before a host has registered it."""
+    ok = await mgr.join("test-code", "peer")
+    assert ok is False
+    meta = await mgr.get_meta("test-code")
+    assert meta.get("peer_connected", "0") == "0"
+
+
+@pytest.mark.asyncio
 async def test_send_and_receive_frame(mgr):
     await mgr.join("test-code", "host")
     await mgr.join("test-code", "peer")

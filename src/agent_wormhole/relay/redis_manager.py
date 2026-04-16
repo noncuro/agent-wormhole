@@ -9,13 +9,22 @@ from redis.asyncio import Redis
 CHANNEL_TTL = 3600  # 1 hour
 STREAM_MAXLEN = 1000
 
-# Lua script for atomic join: check-and-set role in meta hash
+# Lua script for atomic join: check-and-set role in meta hash.
+# Peers can only join channels where a host is already connected —
+# this prevents code-squatting (pre-registering codes before a host generates them).
 _JOIN_SCRIPT = """
 local meta_key = KEYS[1]
-local role_field = ARGV[1] .. "_connected"
+local role = ARGV[1]
+local role_field = role .. "_connected"
 local current = redis.call("HGET", meta_key, role_field)
 if current == "1" then
     return 0
+end
+if role == "peer" then
+    local host = redis.call("HGET", meta_key, "host_connected")
+    if host ~= "1" then
+        return 0
+    end
 end
 redis.call("HSET", meta_key, role_field, "1")
 redis.call("HSET", meta_key, "last_activity", ARGV[2])
