@@ -222,7 +222,6 @@ async def run_host(
         init_channel_dir(code, role="host", base=base)
 
         _emit(output, {"type": "status", "event": "channel", "code": code})
-        _emit(output, {"type": "status", "event": "waiting"})
 
         if on_code:
             on_code(code)
@@ -257,8 +256,12 @@ async def run_host(
             cleanup_channel(code, base=base)
             return
 
-        status_event = transport.status.get("event", "waiting")
-        _emit(output, {"type": "status", "event": status_event})
+        # Only surface `paired` — `waiting` (the default state after getting
+        # a channel code) would just render an empty notification line in the
+        # user's transcript with no new information.
+        status_event = transport.status.get("event")
+        if status_event == "paired":
+            _emit(output, {"type": "status", "event": status_event})
 
         try:
             if timeout:

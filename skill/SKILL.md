@@ -43,7 +43,7 @@ agent-wormhole setup
 Every Monitor notification becomes a line in the user's transcript. Narrating each one (`Starting...`, `Waiting...`, `Paired...`) produces visual noise that adds nothing. So:
 
 - **Do not announce** that you're starting, waiting, or that the handshake is in progress.
-- **Do not narrate** intermediate events (`waiting`, `paired`, `reconnecting`, `reconnected`). Consume them silently.
+- **Do not narrate** intermediate events (`paired`, `reconnecting`, `reconnected`). Consume them silently.
 - **Only speak when there's something actionable for the user**: the code to share (host), successful connection, disconnection, or an error.
 
 If there's nothing to say, say nothing — let the next meaningful event be the first thing the user reads from you.
@@ -154,7 +154,6 @@ agent-wormhole connect <port>-<word>-<word>-<word>@<hostname>
 ## Status Events
 
 - `{"type":"status","event":"channel","code":"..."}` -- channel created (host only)
-- `{"type":"status","event":"waiting"}` -- waiting for peer
 - `{"type":"status","event":"paired"}` -- peer found on relay, handshake starting
 - `{"type":"status","event":"connected"}` -- peer connected, ready to communicate
 - `{"type":"status","event":"disconnected"}` -- peer disconnected
