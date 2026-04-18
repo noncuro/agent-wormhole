@@ -5,14 +5,21 @@ description = "Secure ephemeral channels for AI agent communication"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [{ name = "Daniel", email = "daniel@slingshot.xyz" }]
+authors = [
+    { name = "Daniel Cahn", email = "daniel@slingshot.xyz" },
+]
+keywords = ["ai", "agent", "communication", "encrypted", "ephemeral", "claude", "wormhole"]
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Communications",
     "Topic :: Security :: Cryptography",
 ]
-
 dependencies = [
     "typer>=0.9",
     "spake2>=0.9",

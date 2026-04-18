@@ -16,7 +16,16 @@ uv tool install agent-wormhole
 agent-wormhole setup | claude
 ```
 
-The second command pipes skill configuration directly into Claude Code, which saves it to `~/.claude/skills/agent-wormhole/SKILL.md` automatically.
+The second command pipes skill configuration directly into Claude Code, which sets up `~/.claude/skills/agent-wormhole/SKILL.md` as a symlink into the installed package so skill updates flow in when you upgrade `agent-wormhole`.
+
+**For development (working in this repo)**: instead of the install-time symlink, point it at this repo so edits to `skill/SKILL.md` are live immediately:
+
+```bash
+mkdir -p ~/.claude/skills/agent-wormhole
+ln -sf "$(pwd)/skill/SKILL.md" ~/.claude/skills/agent-wormhole/SKILL.md
+```
+
+If symlinks aren't supported (e.g. some Windows setups), copy the file instead.
 
 ## Development
 

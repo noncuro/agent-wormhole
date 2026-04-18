@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
+from typing import Callable
 
 from websockets.asyncio.client import connect as ws_connect, ClientConnection
+from websockets.exceptions import ConnectionClosed
 
 from agent_wormhole.protocol import read_frame, write_frame
 
@@ -117,59 +119,139 @@ class DirectTransport(Transport):
 
 
 class RelayTransport(Transport):
-    """WebSocket transport through a relay server."""
+    """WebSocket transport through a relay server.
 
-    def __init__(self, relay_url: str, code: str, role: str):
+    Transparently reconnects on transient network drops. The relay preserves
+    per-role cursor position, so frames buffered in the Redis stream while we
+    were away are replayed on reconnect. A peer_disconnected control message
+    is surfaced via the on_status callback and does not end the channel — the
+    peer may be reconnecting, and anything it sends will arrive via the stream.
+    """
+
+    RECONNECT_ATTEMPTS = 10
+    RECONNECT_DELAY = 1.0
+    RECONNECT_BACKOFF = 1.5
+    RECONNECT_MAX_DELAY = 5.0
+
+    def __init__(
+        self,
+        relay_url: str,
+        code: str,
+        role: str,
+        on_status: Callable[[dict], None] | None = None,
+    ):
         self._relay_url = relay_url
         self._code = code
         self._role = role
         self._ws: ClientConnection | None = None
         self._status: dict = {}
+        self._on_status = on_status
+        self._reconnect_lock = asyncio.Lock()
+        self._closed = False
 
-    async def connect(self) -> None:
+    async def _open_ws(self) -> tuple[ClientConnection, dict]:
         ws_url = self._relay_url.rstrip("/") + "/ws"
-        self._ws = await ws_connect(ws_url)
-        # Send join message
+        ws = await ws_connect(ws_url, open_timeout=30)
         join_msg = json.dumps({
             "action": "join",
             "code": self._code,
             "role": self._role,
         })
-        await self._ws.send(join_msg)
-        # Wait for status response
-        raw = await self._ws.recv(decode=False)
+        await ws.send(join_msg)
+        raw = await ws.recv(decode=False)
         if isinstance(raw, bytes):
             raw = raw.decode()
         status = json.loads(raw)
         if status.get("type") == "error":
+            await ws.close()
             raise ConnectionError(
                 f"Relay rejected join: {status.get('message', 'unknown error')}"
             )
-        self._status = status
+        return ws, status
+
+    async def connect(self) -> None:
+        self._ws, self._status = await self._open_ws()
 
     @property
     def status(self) -> dict:
         """The join status response from the relay."""
         return self._status
 
+    async def _reconnect_if_stale(self, stale_ws: ClientConnection | None) -> None:
+        """Reopen the WS if the one we tried to use is the current (stale) one.
+
+        Retries across slot-taken races (server hasn't yet freed our role after
+        the old socket died). Raises if reconnect fails after RECONNECT_ATTEMPTS.
+        """
+        async with self._reconnect_lock:
+            if self._closed:
+                raise ConnectionError("transport closed")
+            if self._ws is not stale_ws:
+                return  # Another coroutine already reconnected
+            if self._on_status:
+                self._on_status({"type": "status", "event": "reconnecting"})
+            if stale_ws is not None:
+                try:
+                    await stale_ws.close()
+                except Exception:
+                    pass
+            delay = self.RECONNECT_DELAY
+            last_exc: Exception | None = None
+            for attempt in range(self.RECONNECT_ATTEMPTS):
+                try:
+                    ws, status = await self._open_ws()
+                    self._ws = ws
+                    self._status = status
+                    if self._on_status:
+                        self._on_status({"type": "status", "event": "reconnected"})
+                    return
+                except Exception as e:
+                    last_exc = e
+                    if attempt == self.RECONNECT_ATTEMPTS - 1:
+                        break
+                    await asyncio.sleep(delay)
+                    delay = min(delay * self.RECONNECT_BACKOFF, self.RECONNECT_MAX_DELAY)
+            raise ConnectionError(f"reconnect failed: {last_exc}")
+
     async def send_frame(self, data: bytes) -> None:
-        assert self._ws is not None
-        await self._ws.send(data)
+        for _ in range(2):
+            ws = self._ws
+            assert ws is not None
+            try:
+                await ws.send(data)
+                return
+            except ConnectionClosed:
+                await self._reconnect_if_stale(ws)
+        raise ConnectionError("send_frame failed after reconnect")
 
     async def recv_frame(self) -> bytes:
-        assert self._ws is not None
-        data = await self._ws.recv(decode=False)
-        if isinstance(data, str):
-            # Could be a JSON control message from relay
-            msg = json.loads(data)
-            if msg.get("type") == "status" and msg.get("event") == "peer_disconnected":
-                raise ConnectionError("Peer disconnected")
-            if msg.get("type") == "error":
-                raise ConnectionError(f"Relay error: {msg.get('message')}")
-            # For paired notifications, recurse to get the next binary frame
-            return await self.recv_frame()
-        return data
+        while True:
+            ws = self._ws
+            assert ws is not None
+            try:
+                data = await ws.recv(decode=False)
+            except ConnectionClosed:
+                await self._reconnect_if_stale(ws)
+                continue
+            if isinstance(data, str):
+                msg = json.loads(data)
+                event = msg.get("event") if msg.get("type") == "status" else None
+                if event == "peer_disconnected":
+                    if self._on_status:
+                        self._on_status(msg)
+                    continue
+                if msg.get("type") == "error":
+                    if self._on_status:
+                        self._on_status(msg)
+                    continue
+                # Other status (paired, waiting) after a reconnect — ignore
+                continue
+            return data
 
     async def close(self) -> None:
+        self._closed = True
         if self._ws:
-            await self._ws.close()
+            try:
+                await self._ws.close()
+            except Exception:
+                pass

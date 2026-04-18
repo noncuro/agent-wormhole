@@ -8,6 +8,13 @@ argument-hint: "<action> (host, connect <code>)"
 
 Secure, encrypted communication channel between two Claude Code instances.
 
+## Quick Reference
+
+| You want to... | Command |
+|---|---|
+| **Host** a new channel | `/agent-wormhole` (no args) — hosts and gives you a code to share |
+| **Connect** to a channel | `/agent-wormhole connect <code>` — paste the code the host gave you |
+
 ## Prerequisites
 
 `agent-wormhole` must be installed and this skill must be set up. Check both:
@@ -106,6 +113,7 @@ When displaying messages to the user, format them clearly so both sides of the c
 - **Rate limits**: 60 messages/minute, 50 MB/minute per channel. Batch small messages where practical.
 - **Max frame size**: 10 MB per message/file.
 - **Disconnection**: If the peer disconnects, you'll receive `{"type":"status","event":"peer_disconnected"}`. The channel stays alive -- the peer can reconnect within the 1-hour TTL.
+- **Auto-reconnect on network blips**: If your own websocket drops (flaky wifi, brief outage), the client reconnects silently and replays any frames buffered by the relay while you were away. You'll see `{"type":"status","event":"reconnecting"}` followed by `{"type":"status","event":"reconnected"}`. No action needed. If reconnect fails after several retries, you'll get `{"type":"status","event":"disconnected"}` and the channel ends. If you see `peer_disconnected`, wait a few seconds -- the peer's client will reconnect automatically and any message they send next will reach you.
 
 ## Important: Save Before Closing
 
@@ -142,6 +150,8 @@ agent-wormhole connect <port>-<word>-<word>-<word>@<hostname>
 - `{"type":"status","event":"paired"}` -- peer found on relay, handshake starting
 - `{"type":"status","event":"connected"}` -- peer connected, ready to communicate
 - `{"type":"status","event":"disconnected"}` -- peer disconnected
-- `{"type":"status","event":"peer_disconnected"}` -- peer dropped (relay mode, channel still alive)
+- `{"type":"status","event":"peer_disconnected"}` -- peer dropped (relay mode, channel still alive; peer may auto-reconnect)
+- `{"type":"status","event":"reconnecting"}` -- our websocket dropped, reopening (transient)
+- `{"type":"status","event":"reconnected"}` -- websocket back up, resuming
 - `{"type":"status","event":"handshake_failed","detail":"..."}` -- authentication failed (wrong code)
 - `{"type":"status","event":"error","detail":"..."}` -- other error

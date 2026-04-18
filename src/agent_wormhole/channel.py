@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Callable, TextIO
 
+from websockets.exceptions import ConnectionClosed
+
 from agent_wormhole.config import get_relay_url
 from agent_wormhole.crypto import Handshake, SessionKeys, decrypt, encrypt
 from agent_wormhole.fs import (
@@ -25,6 +27,29 @@ from agent_wormhole.transport import DirectTransport, RelayTransport, Transport
 from agent_wormhole.wordlist import generate_code, generate_relay_code, parse_code
 
 TEXT_STDOUT_LIMIT = 1024  # 1KB
+
+
+async def _connect_with_retry(
+    transport: Transport,
+    max_attempts: int = 2,
+    delay: float = 2.0,
+) -> None:
+    """Connect with one retry for transient handshake failures.
+
+    A ConnectionError from the relay (bad code, squatted code) is final, so
+    it bubbles up immediately. Other failures such as Railway cold-start WS
+    handshake timeouts are worth a second attempt.
+    """
+    for attempt in range(max_attempts):
+        try:
+            await transport.connect()
+            return
+        except ConnectionError:
+            raise
+        except Exception:
+            if attempt == max_attempts - 1:
+                raise
+            await asyncio.sleep(delay)
 
 
 def _emit(output: TextIO, data: dict) -> None:
@@ -120,7 +145,7 @@ async def _receiver(
     while True:
         try:
             encrypted = await transport.recv_frame()
-        except (asyncio.IncompleteReadError, ConnectionError):
+        except (asyncio.IncompleteReadError, ConnectionError, ConnectionClosed):
             _emit(output, {"type": "status", "event": "disconnected"})
             return
 
@@ -223,10 +248,10 @@ async def run_host(
             on_code(code)
 
         url = get_relay_url(relay_url)
-        transport = RelayTransport(url, code, "host")
+        transport = RelayTransport(url, code, "host", on_status=lambda s: _emit(output, s))
 
         try:
-            await transport.connect()
+            await _connect_with_retry(transport)
         except Exception as e:
             _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
             cleanup_channel(code, base=base)
@@ -281,10 +306,10 @@ async def run_peer(
         # Relay mode (3-word code, no port)
         init_channel_dir(code, role="peer", base=base)
         url = get_relay_url(relay_url)
-        transport = RelayTransport(url, code, "peer")
+        transport = RelayTransport(url, code, "peer", on_status=lambda s: _emit(output, s))
 
         try:
-            await transport.connect()
+            await _connect_with_retry(transport)
         except Exception as e:
             _emit(output, {"type": "status", "event": "connection_failed", "detail": str(e)})
             cleanup_channel(code, base=base)
