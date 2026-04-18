@@ -38,11 +38,21 @@ agent-wormhole setup
 
 **Note:** This skill requires the Monitor tool, built into Claude Code since v2.1.98. If Monitor isn't available, run `claude update`.
 
+## Quiet-by-default output policy
+
+Every Monitor notification becomes a line in the user's transcript. Narrating each one (`Starting...`, `Waiting...`, `Paired...`) produces visual noise that adds nothing. So:
+
+- **Do not announce** that you're starting, waiting, or that the handshake is in progress.
+- **Do not narrate** intermediate events (`waiting`, `paired`, `reconnecting`, `reconnected`). Consume them silently.
+- **Only speak when there's something actionable for the user**: the code to share (host), successful connection, disconnection, or an error.
+
+If there's nothing to say, say nothing — let the next meaningful event be the first thing the user reads from you.
+
 ## Hosting a Channel (you are the initiator)
 
 Start a channel and share the code with the other instance:
 
-1. Start the channel using Monitor:
+1. Start the channel using Monitor — **do not emit any message before or after this call**:
    ```
    Monitor(
      command="agent-wormhole host",
@@ -50,20 +60,18 @@ Start a channel and share the code with the other instance:
      persistent=True
    )
    ```
-2. The first notification will contain the channel code:
-   `{"type":"status","event":"channel","code":"<word>-<word>-<word>"}`
-3. Tell the user to give the other Claude session this ready-to-paste command:
+2. Silently consume events until you receive `{"type":"status","event":"channel","code":"<word>-<word>-<word>"}`. This is the first thing you announce to the user:
    ```
    /agent-wormhole connect <code>
    ```
    No hostname needed -- the relay server handles routing.
-4. Wait for `{"type":"status","event":"connected"}` before sending messages.
+3. Silently wait for `{"type":"status","event":"connected"}`. Announce connection in one short line, then stand by.
 
 ## Connecting to a Channel (you received a code)
 
 If invoked as `/agent-wormhole connect <code>`, parse the code from the argument.
 
-1. Start listening using Monitor:
+1. Start listening using Monitor — **no preamble message**:
    ```
    Monitor(
      command="agent-wormhole connect <code>",
@@ -71,8 +79,8 @@ If invoked as `/agent-wormhole connect <code>`, parse the code from the argument
      persistent=True
    )
    ```
-2. Wait for `{"type":"status","event":"connected"}`.
-3. Tell the user you're connected and ready to send/receive.
+2. Silently wait for `{"type":"status","event":"connected"}`. Do not narrate `waiting` or `paired`.
+3. On `connected`, tell the user you're connected and ready to send/receive in one short line.
 
 ## Sending Messages
 
