@@ -36,6 +36,23 @@ uv sync                  # install deps
 uv run pytest            # run tests
 ```
 
+## Releasing to PyPI
+
+Publishing is automated via `.github/workflows/publish.yml`. Trigger is a `v*` tag push; auth is PyPI Trusted Publishing (OIDC) through the `pypi` GitHub environment — no API token secret.
+
+To cut a release:
+
+```bash
+# 1. bump version in pyproject.toml (e.g. 0.1.4 -> 0.1.5)
+# 2. commit and push
+git commit -am "chore: bump version to 0.1.5"
+git push
+# 3. tag and push the tag
+git tag v0.1.5 && git push origin v0.1.5
+```
+
+The workflow verifies the tag matches `pyproject.toml` version before building, so keep them in sync. Published artifact: https://pypi.org/p/agent-wormhole.
+
 ## Project structure
 
 - `src/agent_wormhole/` — core library (CLI, crypto, channel logic)
