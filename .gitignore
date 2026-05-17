@@ -6,3 +6,4 @@ build/
 .venv/
 .worktrees/
 .working/
+.claude/
