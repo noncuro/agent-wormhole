@@ -51,9 +51,9 @@ The existing word-code pairing UX is preserved: still a short word code, still t
 
 Three layers, each owned by an existing protocol:
 
-- **Bootstrap** — magic-wormhole word-code pairing, used once per peer pair to exchange identity payloads. We write only the payload-exchange logic on top of the open channel (~50 LOC).
+- **Bootstrap** — magic-wormhole word-code pairing, orchestrated by the skill (not by our CLI). The skill drives Claude to invoke `wormhole send/receive` directly; our code's only role is `identity-envelope` (read self → JSON) and `trust` (write peer → trust file).
 - **Steady-state messaging** — Nostr (NIP-44 ECDH + ChaCha20-Poly1305, wrapped in NIP-17 gift wrap), over any number of relays.
-- **Bulk files** — magic-wormhole again, with the transfer code passed inside a Nostr DM.
+- **Bulk files** — magic-wormhole again, with the transfer code passed inside a Nostr DM and auto-received on the listener side.
 
 ## Components
 
@@ -62,8 +62,7 @@ Three layers, each owned by an existing protocol:
 | `identity.py` | Load or create secp256k1 keypair at `~/.agent-wormhole/identity.key` (mode 0600). Expose `my_pubkey()`, `sign()`, `decrypt_for_me()`. |
 | `trust.py` | Read/write `~/.agent-wormhole/trusted_peers.json`. Map `{pubkey → {name, relays, added_at}}`. Lookups by pubkey or name. |
 | `nostr.py` | Minimal Nostr client. Relay-pool websockets, REQ/EVENT framing, NIP-01 event signing, NIP-44 encryption, NIP-17 gift-wrap/unwrap. No NIP-04 (deprecated). |
-| `pairing.py` | Wraps magic-wormhole's pairing API. Both sides open a wormhole with the shared word code, exchange one identity envelope each, then close. On success, both sides write the peer into their trust file. |
-| `bulk.py` | Thin wrapper around magic-wormhole for file send/receive. Returns codes; consumes codes. |
+| `bulk.py` | Thin wrapper around `wormhole` CLI subprocess for file send/receive. Returns codes; consumes codes. |
 | `listener.py` | Long-running subscribe loop. REQ for kind-1059 events tagged to my pubkey across all configured relays. Decrypt → trust-check → dispatch (text → stdout line, file-offer → bulk receive → stdout line). |
 | `cli.py` | Typer commands (see CLI surface). |
 | `fs.py` | Per-peer inbound files directory + outbox file under `/tmp/agent-wormhole/<peer>/`. Refactored from per-channel. |
@@ -97,16 +96,17 @@ Three layers, each owned by an existing protocol:
 
 | Command | Behavior |
 |---|---|
-| `agent-wormhole pair` | Host role: generate a magic-wormhole word code, print it, wait for peer, exchange identities, write trust file. |
-| `agent-wormhole pair <code>` | Peer role: connect with the code, exchange identities, write trust file. |
+| `agent-wormhole identity-envelope` | Print my identity payload (`{"type":"identity","pubkey":...,"name":...,"relays":[...]}`) as one JSON line. The skill pipes this through `wormhole send --text` during pairing. |
 | `agent-wormhole listen` | Long-running. Subscribe to NIP-17 DMs addressed to my pubkey across all configured relays. Emit one JSON line per delivered (trusted) event. Untrusted events are silently dropped. |
 | `agent-wormhole send <peer> <msg>` | Resolve peer (name → pubkey via trust file). Sign and NIP-17 wrap the message. Publish EVENT to all configured relays. |
 | `agent-wormhole send-file <peer> <path>` | Start a magic-wormhole sender, capture the code, send a `file-offer` DM to the peer with metadata + code + expiry. Hold the wormhole open until the peer connects or the timeout fires. |
 | `agent-wormhole peers` | List trusted peers (name, short pubkey, last-seen if tracked). |
 | `agent-wormhole whoami` | Print my pubkey (npub + hex), configured relays. |
-| `agent-wormhole trust <pubkey> <name> [--relays ...]` | Manually add a peer (out-of-band introduction). |
+| `agent-wormhole trust <pubkey> <name> [--relays ...]` | Add a peer to the trust file. Used by the skill after `wormhole receive` returns the peer's identity envelope. |
 | `agent-wormhole untrust <peer>` | Remove a peer from the trust file. |
 | `agent-wormhole setup` | Unchanged — installs the skill. |
+
+There is no `pair` command. Pairing is orchestrated by the `/agent-wormhole` skill, which invokes the `wormhole` CLI directly (see Skill UX section).
 
 The existing single-channel `send` / `recv` commands are removed. The skill is updated accordingly.
 
@@ -114,13 +114,19 @@ The existing single-channel `send` / `recv` commands are removed. The skill is u
 
 ### Pairing (once per peer)
 
-1. Alice runs `agent-wormhole pair`. Allocates a magic-wormhole code (`4-foo-bar`), prints it.
-2. Bob runs `agent-wormhole pair 4-foo-bar`. magic-wormhole's SPAKE2 handshake completes; both sides have a shared session key.
-3. Each side sends a single envelope through the open wormhole: `{"type":"identity","pubkey":"<hex>","name":"<friendly>","relays":["wss://..."]}`.
-4. Each side verifies the other's envelope, then writes the peer into its `trusted_peers.json`.
-5. Wormhole closes. Pairing is complete.
+Pairing is orchestrated by the `/agent-wormhole` skill, which invokes the `wormhole` CLI directly. agent-wormhole's only contribution is `identity-envelope` (read identity → JSON) and `trust` (write peer to trust file). The flow:
 
-The CLI prints the peer's name + short pubkey on success so the user can confirm out-of-band if desired.
+1. Both Claude instances run `agent-wormhole identity-envelope` to get their own JSON payload.
+2. Claude A: `wormhole send --text "$(agent-wormhole identity-envelope)"`. magic-wormhole prints a word code. Claude A surfaces it to the user.
+3. The user reads the code aloud / pastes it to the second machine.
+4. Claude B: `wormhole receive <code-from-A>`. Receives Alice's envelope as JSON. Parses it. Runs `agent-wormhole trust <alice_pubkey> <alice_name> --relays <alice_relays>`.
+5. Claude B then sends its own envelope back: `wormhole send --text "$(agent-wormhole identity-envelope)"`. New code printed.
+6. Claude A runs `wormhole receive <code-from-B>`. Parses Bob's envelope. Runs `agent-wormhole trust <bob_pubkey> <bob_name> --relays <bob_relays>`.
+7. Both sides have each other in `trusted_peers.json`. Done.
+
+UX cost: two short codes typed instead of one (the magic-wormhole CLI is unidirectional, so each direction needs its own session). Benefit: zero pairing code in our package; failure modes are visible (Claude sees real wormhole stdout/stderr); no Twisted anywhere in our process tree.
+
+Each side's `trust` invocation prints the added peer's name + short pubkey, which the skill surfaces for out-of-band confirmation.
 
 ### Text message (steady state)
 
@@ -166,11 +172,11 @@ There is no agent-wormhole-operated server. Self-hosters point `AGENT_WORMHOLE_R
 
 ## Skill UX
 
-The `/agent-wormhole` skill is updated:
+The `/agent-wormhole` skill carries the pairing orchestration in its prompt — agent-wormhole's package supplies primitives (`identity-envelope`, `trust`, `listen`, `send`, `send-file`), and the skill stitches them together with `wormhole` CLI calls.
 
-- **First contact:** the user invokes `/agent-wormhole` on both machines, words are exchanged, pairing completes. Skill text gains one line: *"Identity saved. You can talk to this peer again later without re-pairing — just run `agent-wormhole listen` and the other side can `send <name> <msg>` anytime."*
-- **Returning peer:** the user invokes `/agent-wormhole` with a peer name already in the trust file. The skill skips the pairing dance entirely, starts `listen` if not already running, and tells Claude to use `send <name>` / `send-file <name>` for outgoing.
-- **File send:** the skill instructs Claude to use `send-file` for any payload >100 KB or any non-text payload.
+- **First contact:** the user invokes `/agent-wormhole` on both machines. The skill drives both Claudes through the two-code wormhole dance described in *Data flow → Pairing*, then calls `agent-wormhole trust` on each side to write the trust file, then starts `agent-wormhole listen` under Monitor on each machine.
+- **Returning peer:** the user invokes `/agent-wormhole` with a peer name already in the trust file. The skill skips the wormhole dance entirely, starts `listen` if not already running, and tells Claude to use `agent-wormhole send <name>` / `agent-wormhole send-file <name>` for outgoing.
+- **File send:** the skill instructs Claude to use `send-file` for any payload >100 KB or any non-text payload. The recipient's listener auto-fetches via magic-wormhole when the offer arrives (gated by trust check).
 
 Monitor integration is unchanged. Listener emits one JSON line per delivered event, same shape as today.
 
@@ -182,7 +188,7 @@ Monitor integration is unchanged. Listener emits one JSON line per delivered eve
 - **Partial relay failure.** Continue with whichever relays connect. Publish requires at least one ACK or the send returns an error.
 - **Pairing collision on name.** If the trust file already has a peer with this name (different pubkey), prompt to overwrite or pick a new local alias. The pubkey is the truth; the name is local.
 - **File offer expires before pickup.** Sender's magic-wormhole code times out (default 5 min). Receiver's late attempt fails fast; listener emits a warning line.
-- **Identity file missing.** `listen`, `send`, `send-file` refuse to start with a clear error. `pair` and `whoami` auto-create on first run.
+- **Identity file missing.** `listen`, `send`, `send-file` refuse to start with a clear error. `identity-envelope` and `whoami` auto-create on first run.
 - **Identity file corrupt / wrong permissions.** Refuse to start. Print remediation instruction.
 - **Clock skew.** Nostr events have `created_at`. Listener tolerates up to 5 minutes of skew; older or future-dated events are dropped with a stderr warning.
 
@@ -210,7 +216,7 @@ Monitor integration is unchanged. Listener emits one JSON line per delivered eve
   - File transfer end-to-end through magic-wormhole (test mode against local rendezvous).
   - Untrusted sender: confirm zero stdout output.
   - Relay restart mid-listen: confirm reconnect with backoff and a `relay_status` warning.
-- The existing wormhole pairing tests are deleted along with the homegrown wormhole code. Pairing is now tested end-to-end via magic-wormhole's test mailbox.
+- The existing wormhole pairing tests are deleted along with the homegrown wormhole code. There is no in-tree pairing test because pairing is now skill-orchestrated `wormhole` CLI invocations; it's exercised by manual smoke before release. `trust` (the only piece of pairing in our code) is unit-tested.
 
 ## Migration
 
@@ -238,16 +244,17 @@ This is a clean break, not a backwards-compatible evolution. Strategy:
 - `protocol.py` file-as-base64 path.
 
 **Add:**
-- `identity.py`, `trust.py`, `nostr.py`, `pairing.py` (magic-wormhole wrapper), `bulk.py`, `listener.py`, expanded `cli.py`, new tests.
+- `identity.py`, `trust.py`, `nostr.py`, `bulk.py`, `listener.py`, expanded `cli.py`, new tests.
+- No `pairing.py` — pairing lives in the skill prompt, which invokes the `wormhole` CLI directly.
 
 **New dependencies:**
-- `pynostr` (Nostr protocol library) — alternative: hand-roll ~300 LOC; pynostr pulls in `secp256k1` and `websockets` we'd want regardless.
-- `magic-wormhole` — used for both bootstrap and bulk transfer. Pulls in Twisted + autobahn + spake2.
+- Hand-rolled Nostr (NIP-01 / NIP-44 / NIP-17) — no library; ~400 LOC with canonical vector tests. Reasons: `pynostr` and friends have patchy NIP-17 support; the spec is small and the vectors are public.
+- `coincurve` — secp256k1 BIP-340 Schnorr + ECDH bindings.
+- `magic-wormhole` — invoked as a CLI subprocess by the skill (for pairing) and by `send-file` / listener (for bulk). Pulls in Twisted + autobahn + spake2 transitively, but they stay in the wormhole subprocess; our process is pure asyncio.
 
 ## Open questions for implementation
 
 These are deferred to the plan/implementation phase; flagged here so they aren't lost:
 
-- **pynostr vs hand-roll.** pynostr's NIP-17 / NIP-44 support level needs verification. If NIP-17 isn't supported, we either layer it ourselves (~50 LOC) or pick a different library.
-- **magic-wormhole integration.** Library is Twisted-based. Use it directly (with Twisted ↔ asyncio bridge) or subprocess the `wormhole` CLI (simpler, fewer deps to wrangle, costs us a process per pairing/transfer). Default leaning subprocess.
+- **Pairing edge cases.** Skill-orchestrated wormhole means the failure modes (peer never connects, code typo, peer aborts) are surfaced by the `wormhole` CLI to Claude. We rely on Claude reasoning about them. Worth a manual smoke pass per release.
 - **Listener concurrency model.** asyncio is the obvious fit for Nostr's websocket-heavy I/O. Confirmed if magic-wormhole is subprocessed (no Twisted in our process).
