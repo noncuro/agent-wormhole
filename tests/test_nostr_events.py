@@ -41,3 +41,43 @@ def test_verify_rejects_tampered_content(tmp_path):
     ev = build_event(ident, kind=1, tags=[], content="hello")
     bad = Event(**{**ev.__dict__, "content": "goodbye"})
     assert verify_event(bad) is False
+
+
+from agent_wormhole.nostr.events import (
+    build_giftwrapped_dm,
+    unwrap_giftwrapped_dm,
+)
+from agent_wormhole.identity import load_or_create as _load
+
+
+def test_giftwrap_roundtrip(tmp_path):
+    sender = _load(tmp_path / "s")
+    recipient = _load(tmp_path / "r")
+
+    wrap = build_giftwrapped_dm(
+        sender=sender,
+        recipient_pubkey_hex=recipient.pubkey_hex,
+        content="hi alice",
+    )
+
+    assert wrap.kind == 1059
+    assert ["p", recipient.pubkey_hex] in wrap.tags
+    assert wrap.pubkey != sender.pubkey_hex
+
+    sender_pub, plaintext = unwrap_giftwrapped_dm(wrap, recipient=recipient)
+    assert sender_pub == sender.pubkey_hex
+    assert plaintext == "hi alice"
+
+
+def test_giftwrap_rejects_wrong_recipient(tmp_path):
+    sender = _load(tmp_path / "s")
+    intended = _load(tmp_path / "r1")
+    stranger = _load(tmp_path / "r2")
+
+    wrap = build_giftwrapped_dm(
+        sender=sender,
+        recipient_pubkey_hex=intended.pubkey_hex,
+        content="secret",
+    )
+    with pytest.raises(ValueError):
+        unwrap_giftwrapped_dm(wrap, recipient=stranger)
