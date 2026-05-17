@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import os
-import shutil
-import time
 from pathlib import Path
 
 DEFAULT_BASE = Path("/tmp/agent-wormhole")
 
 
 def sanitize_filename(name: str) -> str | None:
-    """Return the filename if safe, None if it contains path traversal."""
     if not name or name in (".", ".."):
         return None
     basename = os.path.basename(name)
@@ -18,84 +15,35 @@ def sanitize_filename(name: str) -> str | None:
     return basename
 
 
-def init_channel_dir(code: str, *, role: str, base: Path = DEFAULT_BASE) -> Path:
-    """Create the channel directory structure with secure permissions.
-
-    Clears any stale outbox for this role from a previous session.
-    Verifies ownership of existing base directory.
-    """
+def init_peer_dir(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
+    """Create (or verify) the per-peer directory tree with secure permissions."""
     if base.exists():
-        stat = base.stat()
-        if stat.st_uid != os.getuid():
-            raise PermissionError(f"Base directory {base} is owned by uid {stat.st_uid}, not current user")
+        st = base.stat()
+        if st.st_uid != os.getuid():
+            raise PermissionError(f"{base} is owned by uid {st.st_uid}, not current user")
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
-    channel_dir = base / code
-    channel_dir.mkdir(mode=0o700, exist_ok=True)
-    (channel_dir / "files").mkdir(mode=0o700, exist_ok=True)
-    (channel_dir / "messages").mkdir(mode=0o700, exist_ok=True)
-
-    # Clear stale outbox for this role
-    outbox = channel_dir / f"outbox-{role}"
-    if outbox.exists():
-        outbox.unlink()
-
-    return channel_dir
+    pdir = base / peer
+    pdir.mkdir(mode=0o700, exist_ok=True)
+    (pdir / "files").mkdir(mode=0o700, exist_ok=True)
+    return pdir
 
 
-def cleanup_channel(code: str, *, base: Path = DEFAULT_BASE) -> None:
-    """Remove all files for a channel."""
-    channel_dir = base / code
-    if channel_dir.exists():
-        shutil.rmtree(channel_dir)
+def outbox_path(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
+    return base / peer / "outbox"
 
 
-def get_outbox_path(code: str, *, role: str, base: Path = DEFAULT_BASE) -> Path:
-    """Get the outbox file path for a channel role."""
-    return base / code / f"outbox-{role}"
+def inbox_files_dir(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
+    return base / peer / "files"
 
 
-def detect_role(code: str, *, base: Path = DEFAULT_BASE) -> str:
-    """Auto-detect the local role by checking which outbox marker exists.
-
-    Returns 'host' or 'peer'. Raises ValueError if ambiguous (both present)
-    or neither present.
-    """
-    channel_dir = base / code
-    has_host = (channel_dir / "outbox-host").exists()
-    has_peer = (channel_dir / "outbox-peer").exists()
-    if has_host and has_peer:
-        raise ValueError(
-            "Both host and peer are on this machine. Use --role host or --role peer."
-        )
-    if has_host:
-        return "host"
-    if has_peer:
-        return "peer"
-    raise ValueError(f"No active channel found for code {code}")
-
-
-def safe_save_file(code: str, name: str, data: bytes, *, base: Path = DEFAULT_BASE) -> Path:
-    """Save a received file with sanitized name and secure permissions."""
-    safe_name = sanitize_filename(name)
-    if safe_name is None:
-        raise ValueError(f"Invalid filename: {name!r}")
-
-    path = base / code / "files" / safe_name
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def safe_save_file(peer: str, name: str, data: bytes, *, base: Path = DEFAULT_BASE) -> Path:
+    safe = sanitize_filename(name)
+    if safe is None:
+        raise ValueError(f"unsafe filename: {name!r}")
+    target = inbox_files_dir(peer, base=base) / safe
+    fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, data)
     finally:
         os.close(fd)
-    return path
-
-
-def safe_save_text(code: str, text: str, *, base: Path = DEFAULT_BASE) -> Path:
-    """Save a large text message to a file with secure permissions."""
-    timestamp = str(int(time.time() * 1000))
-    path = base / code / "messages" / f"{timestamp}.txt"
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, text.encode())
-    finally:
-        os.close(fd)
-    return path
+    return target

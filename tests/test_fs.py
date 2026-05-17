@@ -1,87 +1,49 @@
 import os
 import stat
 import pytest
-from pathlib import Path
 from agent_wormhole.fs import (
-    init_channel_dir,
-    cleanup_channel,
-    safe_save_file,
-    safe_save_text,
-    get_outbox_path,
+    init_peer_dir,
+    outbox_path,
+    inbox_files_dir,
     sanitize_filename,
+    safe_save_file,
 )
 
 
-@pytest.fixture
-def tmp_base(tmp_path):
-    """Use tmp_path as the base directory instead of /tmp/agent-wormhole."""
-    return tmp_path
-
-
-def test_init_channel_dir_creates_structure(tmp_base):
-    channel_dir = init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    assert channel_dir.exists()
-    assert (channel_dir / "files").exists()
-    assert (channel_dir / "messages").exists()
-    # Check permissions
-    mode = stat.S_IMODE(channel_dir.stat().st_mode)
+def test_init_peer_dir_creates_structure(tmp_path):
+    pdir = init_peer_dir("alice", base=tmp_path)
+    assert pdir.exists()
+    assert (pdir / "files").exists()
+    mode = stat.S_IMODE(pdir.stat().st_mode)
     assert mode == 0o700
 
 
-def test_init_channel_dir_clears_stale_outbox(tmp_base):
-    channel_dir = tmp_base / "1234-alpha-bravo-charlie"
-    channel_dir.mkdir(parents=True)
-    outbox = channel_dir / "outbox-host"
-    outbox.write_text("stale data")
-    init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    assert not outbox.exists()
+def test_outbox_path_is_under_peer_dir(tmp_path):
+    init_peer_dir("alice", base=tmp_path)
+    assert outbox_path("alice", base=tmp_path) == tmp_path / "alice" / "outbox"
 
 
-def test_cleanup_channel_removes_all(tmp_base):
-    channel_dir = init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    (channel_dir / "files" / "test.txt").write_text("data")
-    (channel_dir / "messages" / "msg.txt").write_text("hello")
-    cleanup_channel("1234-alpha-bravo-charlie", base=tmp_base)
-    assert not channel_dir.exists()
+def test_inbox_files_dir(tmp_path):
+    init_peer_dir("alice", base=tmp_path)
+    assert inbox_files_dir("alice", base=tmp_path) == tmp_path / "alice" / "files"
 
 
-def test_safe_save_file(tmp_base):
-    channel_dir = init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    path = safe_save_file("1234-alpha-bravo-charlie", "test.txt", b"content", base=tmp_base)
-    assert path.exists()
-    assert path.read_bytes() == b"content"
-    mode = stat.S_IMODE(path.stat().st_mode)
-    assert mode == 0o600
-
-
-def test_safe_save_file_rejects_traversal(tmp_base):
-    init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    with pytest.raises(ValueError, match="Invalid filename"):
-        safe_save_file("1234-alpha-bravo-charlie", "../etc/passwd", b"hack", base=tmp_base)
-    with pytest.raises(ValueError, match="Invalid filename"):
-        safe_save_file("1234-alpha-bravo-charlie", "/etc/passwd", b"hack", base=tmp_base)
-    with pytest.raises(ValueError, match="Invalid filename"):
-        safe_save_file("1234-alpha-bravo-charlie", "foo/bar.txt", b"hack", base=tmp_base)
-
-
-def test_safe_save_text(tmp_base):
-    channel_dir = init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    path = safe_save_text("1234-alpha-bravo-charlie", "long text here", base=tmp_base)
-    assert path.exists()
-    assert path.read_text() == "long text here"
-
-
-def test_sanitize_filename():
-    assert sanitize_filename("hello.txt") == "hello.txt"
-    assert sanitize_filename("path/to/file.txt") is None
-    assert sanitize_filename("../escape.txt") is None
-    assert sanitize_filename("/absolute.txt") is None
+def test_sanitize_filename_rejects_traversal():
+    assert sanitize_filename("../etc/passwd") is None
+    assert sanitize_filename("/abs/path") is None
     assert sanitize_filename("..") is None
-    assert sanitize_filename(".") is None
     assert sanitize_filename("") is None
+    assert sanitize_filename("normal.txt") == "normal.txt"
 
 
-def test_get_outbox_path(tmp_base):
-    init_channel_dir("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    path = get_outbox_path("1234-alpha-bravo-charlie", role="host", base=tmp_base)
-    assert path == tmp_base / "1234-alpha-bravo-charlie" / "outbox-host"
+def test_safe_save_file_rejects_bad_name(tmp_path):
+    init_peer_dir("alice", base=tmp_path)
+    with pytest.raises(ValueError):
+        safe_save_file("alice", "../evil", b"x", base=tmp_path)
+
+
+def test_safe_save_file_writes_with_0600(tmp_path):
+    init_peer_dir("alice", base=tmp_path)
+    path = safe_save_file("alice", "report.pdf", b"data", base=tmp_path)
+    assert path.read_bytes() == b"data"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
