@@ -1,6 +1,6 @@
 [project]
 name = "agent-wormhole"
-version = "0.1.5"
+version = "0.2.0"
 description = "Secure ephemeral channels for AI agent communication"
 readme = "README.md"
 license = "MIT"
@@ -22,12 +22,10 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.9",
-    "spake2>=0.9",
     "cryptography>=42.0",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
+    "coincurve>=20",
     "websockets>=14.0",
-    "redis>=5.0",
+    "magic-wormhole>=0.14",
 ]
 
 [project.urls]
@@ -45,11 +43,13 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "network: marks tests that require network access (deselected by default)",
+]
+addopts = "-m 'not network'"
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "fakeredis[lua]>=2.26",
-    "httpx>=0.28",
 ]
