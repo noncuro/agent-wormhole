@@ -43,22 +43,31 @@ Publishing is automated via `.github/workflows/publish.yml`. Trigger is a `v*` t
 To cut a release:
 
 ```bash
-# 1. bump version in pyproject.toml (e.g. 0.1.4 -> 0.1.5)
+# 1. bump version in pyproject.toml (e.g. 0.2.0 -> 0.2.1)
 # 2. commit and push
-git commit -am "chore: bump version to 0.1.5"
+git commit -am "chore: bump version to 0.2.1"
 git push
 # 3. tag and push the tag
-git tag v0.1.5 && git push origin v0.1.5
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 The workflow verifies the tag matches `pyproject.toml` version before building, so keep them in sync. Published artifact: https://pypi.org/p/agent-wormhole.
 
 ## Project structure
 
-- `src/agent_wormhole/` — core library (CLI, crypto, channel logic)
-- `skill/` — Claude Code skill definition
-- `tests/` — pytest tests
+- `src/agent_wormhole/` — core library
+  - `identity.py` — secp256k1 keypair, Schnorr signing, ECDH
+  - `trust.py` — trusted peers store
+  - `config.py` — relay resolution
+  - `fs.py` — per-peer outbox/files layout
+  - `nostr/` — NIP-44 v2 crypto, NIP-01 events, NIP-17 gift-wrap, async relay pool
+  - `bulk.py` — magic-wormhole subprocess for file transfer
+  - `listener.py` — long-running asyncio listener; emits JSON lines for Monitor
+  - `cli.py` — typer CLI
+- `skill/` — Claude Code skill definition (symlinked into the package)
+- `tests/` — pytest tests, plus an in-process FakeRelay fixture
 
 ## Notes
 
 - The skill uses the **Monitor** tool (built-in since Claude Code v2.1.98). If Monitor is not available, update Claude Code (`claude update`). Monitor is required for real-time message delivery — there is no fallback path.
+- The `wormhole` CLI must be on PATH for pairing and `send-file`/listener auto-receive. It ships as a console script of the `magic-wormhole` Python dep, so any uv-managed venv has it.
