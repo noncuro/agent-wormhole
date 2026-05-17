@@ -22,46 +22,74 @@ class Subscription:
 class RelayPool:
     def __init__(self, urls: list[str]):
         self._urls = urls
-        self._conns: dict[str, "websockets.WebSocketClientProtocol"] = {}
+        self._conns: dict[str, "websockets.ClientConnection"] = {}
         self._readers: list[asyncio.Task] = []
         self._subs: dict[str, tuple[Subscription, dict]] = {}
         self._seen_ids: set[str] = set()
         self._ack_waiters: dict[str, dict[str, asyncio.Future]] = {}
+        self._closing = False
 
     async def connect(self) -> None:
         for url in self._urls:
+            ws = await self._try_connect(url)
+            if ws is not None:
+                self._conns[url] = ws
+            self._readers.append(asyncio.create_task(self._supervisor(url, ws)))
+
+    async def _try_connect(self, url: str):
+        try:
+            return await websockets.connect(url, open_timeout=10)
+        except Exception:
+            return None
+
+    async def _supervisor(self, url: str, ws) -> None:
+        """Read loop with reconnect-and-resubscribe on disconnect."""
+        backoff = 1.0
+        while not self._closing:
+            if ws is None:
+                await asyncio.sleep(min(backoff, 60.0))
+                backoff = min(backoff * 2, 60.0)
+                ws = await self._try_connect(url)
+                if ws is None:
+                    continue
+                self._conns[url] = ws
+                # Re-issue any active subscriptions.
+                for sid, (_sub, flt) in self._subs.items():
+                    try:
+                        await ws.send(json.dumps(["REQ", sid, flt]))
+                    except Exception:
+                        break
+                backoff = 1.0
             try:
-                ws = await websockets.connect(url, open_timeout=10)
+                await self._read_one_session(url, ws)
+            except Exception:
+                pass
+            # Session ended (disconnect or error). Drop the conn ref and loop.
+            self._conns.pop(url, None)
+            ws = None
+
+    async def _read_one_session(self, url: str, ws) -> None:
+        async for raw in ws:
+            try:
+                msg = json.loads(raw)
             except Exception:
                 continue
-            self._conns[url] = ws
-            self._readers.append(asyncio.create_task(self._reader(url, ws)))
-
-    async def _reader(self, url: str, ws) -> None:
-        try:
-            async for raw in ws:
-                try:
-                    msg = json.loads(raw)
-                except Exception:
+            tag = msg[0] if msg else None
+            if tag == "EVENT":
+                _, sub_id, ev_dict = msg
+                if ev_dict["id"] in self._seen_ids:
                     continue
-                tag = msg[0] if msg else None
-                if tag == "EVENT":
-                    _, sub_id, ev_dict = msg
-                    if ev_dict["id"] in self._seen_ids:
-                        continue
-                    self._seen_ids.add(ev_dict["id"])
-                    entry = self._subs.get(sub_id)
-                    if entry is not None:
-                        await entry[0].queue.put(Event.from_dict(ev_dict))
-                elif tag == "EOSE":
-                    pass
-                elif tag == "OK":
-                    _, ev_id, ok, _msg = msg
-                    waiters = self._ack_waiters.get(ev_id)
-                    if waiters and url in waiters and not waiters[url].done():
-                        waiters[url].set_result(bool(ok))
-        except Exception:
-            pass
+                self._seen_ids.add(ev_dict["id"])
+                entry = self._subs.get(sub_id)
+                if entry is not None:
+                    await entry[0].queue.put(Event.from_dict(ev_dict))
+            elif tag == "EOSE":
+                pass
+            elif tag == "OK":
+                _, ev_id, ok, _msg = msg
+                waiters = self._ack_waiters.get(ev_id)
+                if waiters and url in waiters and not waiters[url].done():
+                    waiters[url].set_result(bool(ok))
 
     async def publish(self, ev: Event) -> dict[str, bool]:
         waiters = {url: asyncio.get_running_loop().create_future() for url in self._conns}
@@ -94,10 +122,11 @@ class RelayPool:
         self._subs.pop(sub_id, None)
 
     async def close(self) -> None:
-        for t in self._readers:
-            t.cancel()
-        for ws in self._conns.values():
+        self._closing = True
+        for ws in list(self._conns.values()):
             try:
                 await ws.close()
             except Exception:
                 pass
+        for t in self._readers:
+            t.cancel()

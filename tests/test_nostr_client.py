@@ -39,3 +39,43 @@ async def test_dedupe_across_relays(tmp_path):
             await asyncio.wait_for(sub.next(), timeout=0.3)
         assert first.id == ev.id
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_connect_tolerates_dead_relay():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    url = f"ws://127.0.0.1:{port}"
+
+    pool = RelayPool([url])
+    await pool.connect()
+    sub = await pool.subscribe({"kinds": [1]})
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(sub.next(), timeout=0.3)
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_after_disconnect(tmp_path):
+    """If a relay closes mid-flight, the pool reconnects and resends REQ."""
+    from tests.fake_relay import fake_relay
+
+    async with fake_relay() as (url, _):
+        ident = load_or_create(tmp_path / "k")
+        pool = RelayPool([url])
+        await pool.connect()
+        sub = await pool.subscribe({"kinds": [1]})
+
+        ws = next(iter(pool._conns.values()))
+        await ws.close()
+
+        # Wait for reconnect (initial backoff 1.0s).
+        await asyncio.sleep(2.0)
+        ev = build_event(ident, kind=1, tags=[], content="post-reconnect")
+        await pool.publish(ev)
+        got = await asyncio.wait_for(sub.next(), timeout=3.0)
+        assert got.content == "post-reconnect"
+        await pool.close()
