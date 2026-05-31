@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -13,6 +14,15 @@ _RECEIVE_CODE_RE = re.compile(r"^\d+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$")
 def _validate_receive_code(code: str) -> None:
     if not isinstance(code, str) or _RECEIVE_CODE_RE.fullmatch(code) is None:
         raise ValueError(f"invalid wormhole code: {code!r}")
+
+
+def is_wormhole_code(s: str) -> bool:
+    """True if `s` is a syntactically valid magic-wormhole code (n-word-word…).
+
+    Used by the skill's first-contact routing to recognize when a user has
+    pasted a pairing code (→ join) rather than a peer name (→ listen/invite).
+    """
+    return isinstance(s, str) and _RECEIVE_CODE_RE.fullmatch(s) is not None
 
 
 async def send_file(
@@ -78,3 +88,73 @@ async def receive_file(
     if not files:
         raise RuntimeError("wormhole receive did not produce a file")
     return files[0]
+
+
+async def send_text(
+    text: str,
+    *,
+    on_code: Callable[[str], Awaitable[None]],
+) -> None:
+    """Run `wormhole send --text -`, feeding `text` on stdin. Calls on_code(code)
+    as soon as the rendezvous code is printed, then waits for the receiver to
+    pick up. Mirrors send_file()'s code-scan + terminate-on-error behavior."""
+    proc = await asyncio.create_subprocess_exec(
+        "wormhole", "send", "--text", "-",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    proc.stdin.write(text.encode())
+    await proc.stdin.drain()
+    proc.stdin.close()
+
+    code_seen = False
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        if not code_seen:
+            m = _CODE_RE.search(line.decode(errors="replace"))
+            if m:
+                code_seen = True
+                try:
+                    await on_code(m.group(1))
+                except BaseException:
+                    if proc.returncode is None:
+                        proc.terminate()
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            proc.kill()
+                            await proc.wait()
+                    raise
+    rc = await proc.wait()
+    if rc != 0:
+        raise RuntimeError(f"wormhole send exited {rc}")
+
+
+async def receive_text(code: str) -> str:
+    """Run `wormhole receive -- <code>` and return the transferred message.
+
+    magic-wormhole prints the received text to stdout and its progress chatter
+    to stderr; we return the stdout line that parses as our JSON envelope, or
+    the last non-empty stdout line if none parses."""
+    _validate_receive_code(code)
+    proc = await asyncio.create_subprocess_exec(
+        "wormhole", "receive", "--", code,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"wormhole receive failed: {err.decode(errors='replace')}")
+    lines = [ln for ln in out.decode(errors="replace").splitlines() if ln.strip()]
+    if not lines:
+        raise RuntimeError("wormhole receive produced no text")
+    for ln in lines:
+        try:
+            json.loads(ln)
+            return ln
+        except ValueError:
+            continue
+    return lines[-1]

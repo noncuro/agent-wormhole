@@ -2,7 +2,7 @@
 
 ## Overview
 
-agent-wormhole provides secure, encrypted ephemeral channels for AI agent instances to communicate. Think Magic Wormhole, but for Claude Code sessions talking to each other.
+agent-wormhole provides secure, encrypted ephemeral channels for AI agent instances to communicate. Think Magic Wormhole, but for Claude Code sessions talking to each other. Users can use it to have agent instances talk to each other on two different machines, or to collaborate between two humans via their respective agents.
 
 ## Installation
 
@@ -17,6 +17,8 @@ agent-wormhole setup | claude
 ```
 
 The second command pipes skill configuration directly into Claude Code, which sets up `~/.claude/skills/agent-wormhole/SKILL.md` as a symlink into the installed package so skill updates flow in when you upgrade `agent-wormhole`.
+
+The CLI is built for use by agents, not by humans.
 
 **For development (working in this repo)**: instead of the install-time symlink, point it at this repo so edits to `skill/SKILL.md` are live immediately:
 

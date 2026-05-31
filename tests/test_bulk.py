@@ -1,6 +1,81 @@
 import asyncio
 import pytest
-from agent_wormhole.bulk import send_file, receive_file
+from agent_wormhole.bulk import is_wormhole_code, receive_file, send_file, send_text
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        ("7-foo-bar", True),
+        ("12-guitarist-revenge", True),
+        ("4-foo-bar-baz", True),
+        ("0-a-b", True),
+        ("foo-bar", False),       # no leading number
+        ("7-foo", False),         # only one word segment
+        ("7", False),
+        ("connect to 7-foo-bar", False),  # embedded, not exact
+        ("-0", False),
+        ("", False),
+    ],
+)
+def test_is_wormhole_code(code, expected):
+    assert is_wormhole_code(code) is expected
+
+
+@pytest.mark.asyncio
+async def test_send_text_argv_and_stdin(monkeypatch):
+    captured = {}
+
+    class FakeStdin:
+        def __init__(self):
+            self.data = b""
+
+        def write(self, b):
+            self.data += b
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            captured["stdin_closed"] = True
+
+    class FakeStdout:
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        async def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+    class FakeProc:
+        returncode = 0
+
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = FakeStdout([b"Wormhole code is: 7-foo-bar\n"])
+
+        async def wait(self):
+            return 0
+
+    proc = FakeProc()
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    codes = []
+
+    async def on_code(code):
+        codes.append(code)
+
+    await send_text('{"hello":"world"}', on_code=on_code)
+
+    assert captured["args"] == ("wormhole", "send", "--text", "-")
+    assert proc.stdin.data == b'{"hello":"world"}'
+    assert captured["stdin_closed"] is True
+    assert codes == ["7-foo-bar"]
 
 
 @pytest.mark.asyncio

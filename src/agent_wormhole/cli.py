@@ -201,6 +201,92 @@ def send_file_cmd(
     asyncio.run(_run())
 
 
+@app.command("pair-invite")
+def pair_invite(
+    name: str = typer.Option("", "--name", help="Local name to store the peer under"),
+    timeout: float = typer.Option(120.0, "--timeout", help="Seconds to wait for the reply"),
+):
+    """Inviter side of single-code pairing. Emits one JSON line per event:
+    a `pairing-code` line (read it to the user), then `paired` | `pairing-timeout`."""
+    from agent_wormhole.pairing import invite
+
+    ident = load_or_create(_identity_path())
+    trust = TrustStore(_trust_path())
+    relays = resolve_relays(config_path=_config_path())
+
+    def emit(event: dict) -> None:
+        typer.echo(json.dumps(event))
+
+    async def on_code(code: str) -> None:
+        emit({"type": "pairing-code", "code": code})
+
+    async def _run():
+        await invite(
+            identity=ident,
+            trust=trust,
+            relays=relays,
+            on_code=on_code,
+            emit=emit,
+            name=name or None,
+            timeout=timeout,
+        )
+
+    asyncio.run(_run())
+
+
+@app.command("pair-join")
+def pair_join(
+    code: str = typer.Argument(help="The wormhole code the inviter read out"),
+    name: str = typer.Option("", "--name", help="Local name to store the peer under"),
+):
+    """Joiner side of single-code pairing. Emits `paired` on success."""
+    from agent_wormhole.bulk import is_wormhole_code
+    from agent_wormhole.pairing import join
+
+    if not is_wormhole_code(code):
+        typer.echo(json.dumps({"type": "error", "error": f"not a pairing code: {code!r}"}))
+        raise typer.Exit(1)
+
+    ident = load_or_create(_identity_path())
+    trust = TrustStore(_trust_path())
+    relays = resolve_relays(config_path=_config_path())
+
+    def emit(event: dict) -> None:
+        typer.echo(json.dumps(event))
+
+    async def _run():
+        try:
+            await join(
+                identity=ident,
+                trust=trust,
+                relays=relays,
+                code=code,
+                emit=emit,
+                name=name or None,
+            )
+        except Exception as e:  # surface as a structured line, not a traceback
+            emit({"type": "error", "error": str(e)})
+            raise typer.Exit(2)
+
+    asyncio.run(_run())
+
+
+@app.command()
+def rename(
+    old: str = typer.Argument(help="Current peer name or pubkey"),
+    new: str = typer.Argument(help="New local name"),
+):
+    """Rename a trusted peer without re-pairing."""
+    store = TrustStore(_trust_path())
+    target = store.by_name(old) or store.by_pubkey(old)
+    if target is None:
+        typer.echo(f"unknown peer: {old}", err=True)
+        raise typer.Exit(1)
+    store.remove(target.pubkey)
+    store.add(Peer(pubkey=target.pubkey, name=new, relays=target.relays, added_at=target.added_at))
+    typer.echo(f"renamed {target.name} -> {new}")
+
+
 @app.command()
 def peers():
     """List trusted peers."""
