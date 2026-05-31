@@ -79,6 +79,59 @@ async def test_send_text_argv_and_stdin(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_text_cancel_terminates_subprocess(monkeypatch):
+    class FakeStdin:
+        def write(self, _b):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeStdout:
+        async def readline(self):
+            await asyncio.Event().wait()
+
+    class FakeProc:
+        returncode = None
+
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = FakeStdout()
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    proc = FakeProc()
+
+    async def fake_exec(*_args, **_kwargs):
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    async def on_code(_code):
+        pass
+
+    task = asyncio.create_task(send_text("payload", on_code=on_code))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert proc.terminated is True
+
+
+@pytest.mark.asyncio
 async def test_receive_file_inserts_option_terminator(tmp_path, monkeypatch):
     captured = {}
     received = tmp_path / "received.txt"

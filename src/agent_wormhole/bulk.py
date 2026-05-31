@@ -42,34 +42,39 @@ async def _send_scanning_for_code(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    if stdin_text is not None:
-        proc.stdin.write(stdin_text.encode())
-        await proc.stdin.drain()
-        proc.stdin.close()
+    try:
+        if stdin_text is not None:
+            proc.stdin.write(stdin_text.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
 
-    code_seen = False
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        if not code_seen:
-            m = _CODE_RE.search(line.decode(errors="replace"))
-            if m:
-                code_seen = True
-                try:
+        code_seen = False
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            if not code_seen:
+                m = _CODE_RE.search(line.decode(errors="replace"))
+                if m:
+                    code_seen = True
                     await on_code(m.group(1))
-                except BaseException:
-                    if proc.returncode is None:
-                        proc.terminate()
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=5.0)
-                        except asyncio.TimeoutError:
-                            proc.kill()
-                            await proc.wait()
-                    raise
-    rc = await proc.wait()
+        rc = await proc.wait()
+    except BaseException:
+        await _terminate_process(proc)
+        raise
     if rc != 0:
         raise RuntimeError(f"wormhole send exited {rc}")
+
+
+async def _terminate_process(proc) -> None:
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
 
 
 async def send_file(

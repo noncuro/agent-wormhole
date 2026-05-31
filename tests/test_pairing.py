@@ -183,3 +183,42 @@ async def test_invite_ignores_reply_without_correct_nonce(tmp_path, monkeypatch)
         assert any(e["type"] == "pairing-timeout" for e in events)
         assert inviter_trust.by_pubkey(stranger.pubkey_hex) is None
         assert inviter_trust.all() == []
+
+
+@pytest.mark.asyncio
+async def test_invite_times_out_if_code_is_never_picked_up(tmp_path, monkeypatch):
+    async with fake_relay() as (url, _):
+        inviter = load_or_create(tmp_path / "inviter")
+        inviter_trust = TrustStore(tmp_path / "inviter_trust.json")
+        send_was_cancelled = False
+
+        async def fake_send_text(text, *, on_code):
+            nonlocal send_was_cancelled
+            await on_code(CODE)
+            try:
+                await asyncio.Event().wait()
+            finally:
+                send_was_cancelled = True
+
+        monkeypatch.setattr(bulk, "send_text", fake_send_text)
+
+        events: list[dict] = []
+        codes: list[str] = []
+
+        async def on_code(code):
+            codes.append(code)
+
+        ok = await invite(
+            identity=inviter,
+            trust=inviter_trust,
+            relays=[url],
+            on_code=on_code,
+            emit=events.append,
+            timeout=0.05,
+        )
+
+        assert ok is False
+        assert codes == [CODE]
+        assert events == [{"type": "pairing-timeout"}]
+        assert send_was_cancelled is True
+        assert inviter_trust.all() == []

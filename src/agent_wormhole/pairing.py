@@ -63,6 +63,8 @@ async def invite(
     await pool.connect()
     sub = await pool.subscribe({"kinds": [1059], "#p": [identity.pubkey_hex]})
     try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
         invite_env = json.dumps({
             "type": INVITE_TYPE,
             "v": PROTOCOL_VERSION,
@@ -72,10 +74,15 @@ async def invite(
             "nonce": nonce,
         })
         # Blocks until the joiner picks up the code; the accept arrives after.
-        await bulk.send_text(invite_env, on_code=on_code)
+        try:
+            await asyncio.wait_for(
+                bulk.send_text(invite_env, on_code=on_code),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            emit({"type": "pairing-timeout"})
+            return False
 
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
