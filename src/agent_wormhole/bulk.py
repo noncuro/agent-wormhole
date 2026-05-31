@@ -25,18 +25,28 @@ def is_wormhole_code(s: str) -> bool:
     return isinstance(s, str) and _RECEIVE_CODE_RE.fullmatch(s) is not None
 
 
-async def send_file(
+async def _send_scanning_for_code(
+    args: list[str],
     *,
-    path: Path,
     on_code: Callable[[str], Awaitable[None]],
+    stdin_text: str | None = None,
 ) -> None:
-    """Run `wormhole send <path>`. Calls on_code(code) as soon as the
-    rendezvous code is printed, then waits for transfer to complete."""
+    """Run a `wormhole send …` subprocess. Call on_code(code) as soon as the
+    rendezvous code is printed, then wait for the receiver to pick up. If the
+    on_code callback raises, the subprocess is torn down before re-raising.
+
+    Shared by send_file (path arg, no stdin) and send_text (--text -, stdin)."""
     proc = await asyncio.create_subprocess_exec(
-        "wormhole", "send", str(path),
+        *args,
+        stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
+    if stdin_text is not None:
+        proc.stdin.write(stdin_text.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+
     code_seen = False
     while True:
         line = await proc.stdout.readline()
@@ -60,6 +70,16 @@ async def send_file(
     rc = await proc.wait()
     if rc != 0:
         raise RuntimeError(f"wormhole send exited {rc}")
+
+
+async def send_file(
+    *,
+    path: Path,
+    on_code: Callable[[str], Awaitable[None]],
+) -> None:
+    """Run `wormhole send <path>`. Calls on_code(code) as soon as the
+    rendezvous code is printed, then waits for transfer to complete."""
+    await _send_scanning_for_code(["wormhole", "send", str(path)], on_code=on_code)
 
 
 async def receive_file(
@@ -97,40 +117,10 @@ async def send_text(
 ) -> None:
     """Run `wormhole send --text -`, feeding `text` on stdin. Calls on_code(code)
     as soon as the rendezvous code is printed, then waits for the receiver to
-    pick up. Mirrors send_file()'s code-scan + terminate-on-error behavior."""
-    proc = await asyncio.create_subprocess_exec(
-        "wormhole", "send", "--text", "-",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
+    pick up."""
+    await _send_scanning_for_code(
+        ["wormhole", "send", "--text", "-"], on_code=on_code, stdin_text=text,
     )
-    proc.stdin.write(text.encode())
-    await proc.stdin.drain()
-    proc.stdin.close()
-
-    code_seen = False
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        if not code_seen:
-            m = _CODE_RE.search(line.decode(errors="replace"))
-            if m:
-                code_seen = True
-                try:
-                    await on_code(m.group(1))
-                except BaseException:
-                    if proc.returncode is None:
-                        proc.terminate()
-                        try:
-                            await asyncio.wait_for(proc.wait(), timeout=5.0)
-                        except asyncio.TimeoutError:
-                            proc.kill()
-                            await proc.wait()
-                    raise
-    rc = await proc.wait()
-    if rc != 0:
-        raise RuntimeError(f"wormhole send exited {rc}")
 
 
 async def receive_text(code: str) -> str:
