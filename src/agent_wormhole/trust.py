@@ -6,6 +6,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from agent_wormhole.fs import sanitize_peer_name
+
 
 @dataclass
 class Peer:
@@ -29,6 +31,7 @@ class TrustStore:
             raise ValueError(f"trust file {self._path} is malformed: {e}")
         for entry in raw.get("peers", []):
             p = Peer(**entry)
+            _validate_peer_name(p.name)
             self._peers[p.pubkey] = p
 
     def _save(self) -> None:
@@ -45,6 +48,7 @@ class TrustStore:
         os.replace(tmp, self._path)
 
     def add(self, peer: Peer) -> None:
+        _validate_peer_name(peer.name)
         if any(p.name == peer.name for p in self._peers.values() if p.pubkey != peer.pubkey):
             raise ValueError(f"a different peer is already named {peer.name!r}")
         self._peers[peer.pubkey] = peer
@@ -68,3 +72,8 @@ class TrustStore:
 
     def all(self) -> list[Peer]:
         return list(self._peers.values())
+
+
+def _validate_peer_name(name: str) -> None:
+    if sanitize_peer_name(name) is None:
+        raise ValueError(f"unsafe peer name: {name!r}")

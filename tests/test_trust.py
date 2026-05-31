@@ -41,6 +41,13 @@ def test_name_collision_raises(tmp_path):
         store.add(Peer(pubkey="22" * 32, name="alice", relays=[]))
 
 
+@pytest.mark.parametrize("name", ["../alice", "/tmp/alice", "..", "alice/keys"])
+def test_path_like_peer_name_raises(tmp_path, name):
+    store = TrustStore(tmp_path / "trust.json")
+    with pytest.raises(ValueError):
+        store.add(Peer(pubkey="11" * 32, name=name, relays=[]))
+
+
 def test_malformed_file_raises(tmp_path):
     path = tmp_path / "trust.json"
     path.write_text("not json")

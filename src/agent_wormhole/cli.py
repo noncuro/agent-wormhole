@@ -183,11 +183,19 @@ def send_file_cmd(
                 recipient_pubkey_hex=target.pubkey,
                 content=FILE_OFFER_MARKER + json.dumps(offer),
             )
-            await pool.publish(wrap)
-            typer.echo(f"offered {path.name} to {target.name}; waiting for pickup…")
+            acks = await pool.publish(wrap)
+            if not any(acks.values()):
+                typer.echo("no relay accepted the file offer", err=True)
+                raise typer.Exit(2)
+            typer.echo(
+                f"offered {path.name} to {target.name} "
+                f"via {sum(acks.values())}/{len(acks)} relays; waiting for pickup…"
+            )
 
-        await bulk_send_file(path=path, on_code=on_code)
-        await pool.close()
+        try:
+            await bulk_send_file(path=path, on_code=on_code)
+        finally:
+            await pool.close()
         typer.echo("done")
 
     asyncio.run(_run())

@@ -18,6 +18,12 @@ def test_init_peer_dir_creates_structure(tmp_path):
     assert mode == 0o700
 
 
+@pytest.mark.parametrize("peer", ["../alice", "/tmp/alice", "..", "alice/keys"])
+def test_init_peer_dir_rejects_path_like_peer_names(tmp_path, peer):
+    with pytest.raises(ValueError):
+        init_peer_dir(peer, base=tmp_path)
+
+
 def test_outbox_path_is_under_peer_dir(tmp_path):
     init_peer_dir("alice", base=tmp_path)
     assert outbox_path("alice", base=tmp_path) == tmp_path / "alice" / "outbox"

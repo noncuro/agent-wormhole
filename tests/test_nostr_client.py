@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pytest
 from agent_wormhole.identity import load_or_create
 from agent_wormhole.nostr.client import RelayPool
@@ -79,3 +80,34 @@ async def test_resubscribe_after_disconnect(tmp_path):
         got = await asyncio.wait_for(sub.next(), timeout=3.0)
         assert got.content == "post-reconnect"
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_subscription_event_does_not_poison_dedupe(tmp_path):
+    ident = load_or_create(tmp_path / "k")
+    pool = RelayPool([])
+    sub = await pool.subscribe({"kinds": [1]})
+    ev = build_event(ident, kind=1, tags=[], content="real")
+
+    class FakeWs:
+        def __init__(self, messages):
+            self._messages = iter(messages)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    ws = FakeWs([
+        json.dumps(["EVENT", "unknown-sub", ev.to_dict()]),
+        json.dumps(["EVENT", sub.sub_id, ev.to_dict()]),
+    ])
+
+    await pool._read_one_session("ws://relay", ws)
+
+    got = await asyncio.wait_for(sub.next(), timeout=0.1)
+    assert got.id == ev.id

@@ -15,6 +15,17 @@ def sanitize_filename(name: str) -> str | None:
     return basename
 
 
+def sanitize_peer_name(name: str) -> str | None:
+    return sanitize_filename(name)
+
+
+def _peer_dir(peer: str, *, base: Path) -> Path:
+    safe = sanitize_peer_name(peer)
+    if safe is None:
+        raise ValueError(f"unsafe peer name: {peer!r}")
+    return base / safe
+
+
 def init_peer_dir(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
     """Create (or verify) the per-peer directory tree with secure permissions."""
     if base.exists():
@@ -22,18 +33,18 @@ def init_peer_dir(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
         if st.st_uid != os.getuid():
             raise PermissionError(f"{base} is owned by uid {st.st_uid}, not current user")
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
-    pdir = base / peer
+    pdir = _peer_dir(peer, base=base)
     pdir.mkdir(mode=0o700, exist_ok=True)
     (pdir / "files").mkdir(mode=0o700, exist_ok=True)
     return pdir
 
 
 def outbox_path(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
-    return base / peer / "outbox"
+    return _peer_dir(peer, base=base) / "outbox"
 
 
 def inbox_files_dir(peer: str, *, base: Path = DEFAULT_BASE) -> Path:
-    return base / peer / "files"
+    return _peer_dir(peer, base=base) / "files"
 
 
 def safe_save_file(peer: str, name: str, data: bytes, *, base: Path = DEFAULT_BASE) -> Path:

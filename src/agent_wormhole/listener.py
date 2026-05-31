@@ -26,15 +26,18 @@ class Listener:
         relays: list[str],
         stdout: IO = sys.stdout,
         files_base: Path = DEFAULT_BASE,
+        file_receive_timeout: float = 300.0,
     ):
         self._identity = identity
         self._trust = trust
         self._relays = relays
         self._stdout = stdout
         self._files_base = files_base
+        self._file_receive_timeout = file_receive_timeout
         self._pool: RelayPool | None = None
         self._sub: Subscription | None = None
         self._task: asyncio.Task | None = None
+        self._file_tasks: set[asyncio.Task] = set()
         self._stopped = asyncio.Event()
 
     async def start(self) -> None:
@@ -67,7 +70,11 @@ class Listener:
             )
             return
         if content.startswith(FILE_OFFER_MARKER):
-            await self._handle_file_offer(peer, content[len(FILE_OFFER_MARKER):])
+            task = asyncio.create_task(
+                self._handle_file_offer(peer, content[len(FILE_OFFER_MARKER):])
+            )
+            self._file_tasks.add(task)
+            task.add_done_callback(self._file_tasks.discard)
             return
         self._emit_text(peer.name, peer.pubkey, content)
 
@@ -80,11 +87,17 @@ class Listener:
         init_peer_dir(peer.name, base=self._files_base)
         dest_dir = inbox_files_dir(peer.name, base=self._files_base)
         try:
-            saved = await receive_file(
-                code=offer["wormhole_code"],
-                dest_dir=dest_dir,
-                accept=True,
+            saved = await asyncio.wait_for(
+                receive_file(
+                    code=offer["wormhole_code"],
+                    dest_dir=dest_dir,
+                    accept=True,
+                ),
+                timeout=self._file_receive_timeout,
             )
+        except asyncio.TimeoutError:
+            print("agent-wormhole: file receive timed out", file=sys.stderr)
+            return
         except Exception as e:
             print(f"agent-wormhole: file receive failed: {e}", file=sys.stderr)
             return
@@ -115,5 +128,11 @@ class Listener:
         self._stopped.set()
         if self._task:
             self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+        if self._file_tasks:
+            tasks = list(self._file_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self._pool:
             await self._pool.close()

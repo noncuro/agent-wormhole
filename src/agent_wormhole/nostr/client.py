@@ -77,12 +77,13 @@ class RelayPool:
             tag = msg[0] if msg else None
             if tag == "EVENT":
                 _, sub_id, ev_dict = msg
+                entry = self._subs.get(sub_id)
+                if entry is None:
+                    continue
                 if ev_dict["id"] in self._seen_ids:
                     continue
                 self._seen_ids.add(ev_dict["id"])
-                entry = self._subs.get(sub_id)
-                if entry is not None:
-                    await entry[0].queue.put(Event.from_dict(ev_dict))
+                await entry[0].queue.put(Event.from_dict(ev_dict))
             elif tag == "EOSE":
                 pass
             elif tag == "OK":

@@ -7,6 +7,12 @@ from typing import Awaitable, Callable
 
 
 _CODE_RE = re.compile(r"[Ww]ormhole code is:\s*(\S+)")
+_RECEIVE_CODE_RE = re.compile(r"^\d+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$")
+
+
+def _validate_receive_code(code: str) -> None:
+    if not isinstance(code, str) or _RECEIVE_CODE_RE.fullmatch(code) is None:
+        raise ValueError(f"invalid wormhole code: {code!r}")
 
 
 async def send_file(
@@ -30,7 +36,17 @@ async def send_file(
             m = _CODE_RE.search(line.decode(errors="replace"))
             if m:
                 code_seen = True
-                await on_code(m.group(1))
+                try:
+                    await on_code(m.group(1))
+                except BaseException:
+                    if proc.returncode is None:
+                        proc.terminate()
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            proc.kill()
+                            await proc.wait()
+                    raise
     rc = await proc.wait()
     if rc != 0:
         raise RuntimeError(f"wormhole send exited {rc}")
@@ -43,9 +59,11 @@ async def receive_file(
     accept: bool = True,
 ) -> Path:
     """Run `wormhole receive <code>` in dest_dir. Return path of received file."""
+    _validate_receive_code(code)
     args = ["wormhole", "receive"]
     if accept:
         args.append("--accept-file")
+    args.append("--")
     args.append(code)
     proc = await asyncio.create_subprocess_exec(
         *args,

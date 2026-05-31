@@ -132,3 +132,70 @@ async def test_file_offer_invokes_bulk_receive(tmp_path, monkeypatch):
         assert parsed["type"] == "file"
         assert parsed["name"] == "report.pdf"
         assert parsed["from"] == "bob"
+
+
+@pytest.mark.asyncio
+async def test_file_offer_does_not_block_later_text_messages(tmp_path, monkeypatch):
+    async with fake_relay() as (url, _):
+        me = load_or_create(tmp_path / "me")
+        sender = load_or_create(tmp_path / "sender")
+        trust = TrustStore(tmp_path / "trust.json")
+        trust.add(Peer(pubkey=sender.pubkey_hex, name="bob", relays=[url]))
+
+        release_receive = asyncio.Event()
+        receive_started = asyncio.Event()
+
+        async def slow_receive(*, code, dest_dir, accept):
+            receive_started.set()
+            await release_receive.wait()
+            target = dest_dir / "report.pdf"
+            target.write_bytes(b"PDF")
+            return target
+
+        monkeypatch.setattr("agent_wormhole.listener.receive_file", slow_receive)
+
+        out = io.StringIO()
+        listener = Listener(
+            identity=me,
+            trust=trust,
+            relays=[url],
+            stdout=out,
+            files_base=tmp_path / "fs",
+        )
+        await listener.start()
+
+        send_pool = RelayPool([url])
+        await send_pool.connect()
+        offer_content = json.dumps({
+            "type": "file-offer",
+            "name": "report.pdf",
+            "size": 3,
+            "sha256": "no-check",
+            "wormhole_code": "4-foo-bar",
+            "expires_in": 60,
+        })
+        offer_wrap = build_giftwrapped_dm(
+            sender=sender,
+            recipient_pubkey_hex=me.pubkey_hex,
+            content="__agent-wormhole-file-offer__:" + offer_content,
+        )
+        await send_pool.publish(offer_wrap)
+        await asyncio.wait_for(receive_started.wait(), timeout=2.0)
+
+        text_wrap = build_giftwrapped_dm(
+            sender=sender,
+            recipient_pubkey_hex=me.pubkey_hex,
+            content="still there?",
+        )
+        await send_pool.publish(text_wrap)
+        await send_pool.close()
+
+        try:
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                if "still there?" in out.getvalue():
+                    break
+            assert "still there?" in out.getvalue()
+        finally:
+            release_receive.set()
+            await listener.stop()
