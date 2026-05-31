@@ -95,16 +95,23 @@ class RelayPool:
     async def publish(self, ev: Event) -> dict[str, bool]:
         waiters = {url: asyncio.get_running_loop().create_future() for url in self._conns}
         self._ack_waiters[ev.id] = waiters
-        for url, ws in self._conns.items():
-            await ws.send(json.dumps(["EVENT", ev.to_dict()]))
-        results: dict[str, bool] = {}
-        for url, fut in waiters.items():
-            try:
-                results[url] = await asyncio.wait_for(fut, timeout=5.0)
-            except asyncio.TimeoutError:
-                results[url] = False
-        self._ack_waiters.pop(ev.id, None)
-        return results
+        try:
+            for url, ws in list(self._conns.items()):
+                try:
+                    await ws.send(json.dumps(["EVENT", ev.to_dict()]))
+                except Exception:
+                    if not waiters[url].done():
+                        waiters[url].set_result(False)
+
+            results: dict[str, bool] = {}
+            for url, fut in waiters.items():
+                try:
+                    results[url] = await asyncio.wait_for(fut, timeout=5.0)
+                except asyncio.TimeoutError:
+                    results[url] = False
+            return results
+        finally:
+            self._ack_waiters.pop(ev.id, None)
 
     async def subscribe(self, flt: dict) -> Subscription:
         sub_id = secrets.token_hex(8)

@@ -111,3 +111,21 @@ async def test_unknown_subscription_event_does_not_poison_dedupe(tmp_path):
 
     got = await asyncio.wait_for(sub.next(), timeout=0.1)
     assert got.id == ev.id
+
+
+@pytest.mark.asyncio
+async def test_publish_marks_send_failures_false_and_clears_waiters(tmp_path):
+    ident = load_or_create(tmp_path / "k")
+    pool = RelayPool([])
+    ev = build_event(ident, kind=1, tags=[], content="hello")
+
+    class BrokenWs:
+        async def send(self, message):
+            raise RuntimeError("closed")
+
+    pool._conns["ws://closed"] = BrokenWs()
+
+    acks = await pool.publish(ev)
+
+    assert acks == {"ws://closed": False}
+    assert ev.id not in pool._ack_waiters
