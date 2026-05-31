@@ -1,12 +1,12 @@
 # agent-wormhole
 
-A Claude Code session on your laptop can hand a file, a message, or a secret to a Claude Code session on another machine, sealed end to end so only the two of them can read it. It's like [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole) for AI agents.
+A Claude Code session on your laptop can hand a file, a message, or a secret to a Claude Code session on another machine, sealed end to end so only the two of them can read it. Built on persistent secp256k1 identities, Nostr NIP-17 gift-wrapped DMs, and [magic-wormhole](https://github.com/magic-wormhole/magic-wormhole) for one-time pairing and bulk file transfer.
 
 ![demo](./docs/demo.gif)
 
 ## What you'd use it for
 
-- Moving an API key between machines, sealed end to end and cleaned up as soon as the channel closes.
+- Moving an API key between machines, sealed end to end, addressable by peer name forever after first contact.
 - Two parallel worktree sessions coordinating who edits what, and handing off context so the next session picks up where the last one left off.
 - Getting a second opinion from another Claude running with a different model or prompt, and pulling the review back into the current session.
 - Two agents pair programming, one on the frontend and one on the backend, trading schemas and test fixtures in real time.
@@ -21,86 +21,90 @@ uv tool install agent-wormhole
 pip install agent-wormhole
 ```
 
-Host a channel:
+A persistent keypair is created on first use at `~/.agent-wormhole/identity.key` (mode 0600). See it:
 
 ```bash
-$ agent-wormhole host
-{"type":"status","event":"channel","code":"9471-crossover-clockwork-marble"}
+$ agent-wormhole whoami
+pubkey: 7f3a…
+relays: wss://relay.damus.io, wss://nos.lol, wss://relay.primal.net
 ```
 
-Connect from the other side with that code:
+### First contact (pairing)
+
+The `/agent-wormhole` skill drives this; the two sides exchange identity envelopes over two short magic-wormhole codes (one each direction) and each writes the other into its trust file:
 
 ```bash
-$ agent-wormhole connect 9471-crossover-clockwork-marble
-{"type":"status","event":"connected"}
+# Machine A → reads code aloud
+agent-wormhole identity-envelope | wormhole send --text -
+
+# Machine B → with A's code
+wormhole receive <code-A>   # prints A's envelope JSON
+agent-wormhole trust <A-pubkey> alice --relays <relays>
+
+# Then reverse so A trusts B too.
 ```
 
-Send a message or a file:
+### Steady state
+
+Keep a listener running; it emits one JSON line per inbound message:
 
 ```bash
-agent-wormhole send 9471-crossover-clockwork-marble "hello from laptop"
-agent-wormhole send 9471-crossover-clockwork-marble --file ./config.json
+$ agent-wormhole listen
+{"type":"text","from":"alice","content":"hi","received_at":1700000000}
+{"type":"file","from":"alice","name":"report.pdf","saved_to":"/tmp/agent-wormhole/alice/files/report.pdf","size":4096,…}
 ```
 
-Close the channel:
+Send by peer name:
 
 ```bash
-agent-wormhole close 9471-crossover-clockwork-marble
+agent-wormhole send alice "hello from laptop"
+agent-wormhole send-file alice ./config.json
+```
+
+Manage trust:
+
+```bash
+agent-wormhole peers
+agent-wormhole untrust alice
 ```
 
 ## Using it from Claude Code
 
-agent-wormhole ships with a Claude Code skill so your agents know how to host a channel, connect to one, and trade messages on their own. Install it with one piped command:
+agent-wormhole ships with a Claude Code skill. Install it:
 
 ```bash
 agent-wormhole setup | claude
 ```
 
-That pipes the skill configuration into Claude Code, which symlinks `~/.claude/skills/agent-wormhole/SKILL.md` into the installed package so the skill updates when you upgrade `agent-wormhole`.
+That symlinks `~/.claude/skills/agent-wormhole/SKILL.md` into the installed package, so the skill updates when you upgrade `agent-wormhole`.
 
 Then either session can run:
 
-- `/agent-wormhole` to host a new channel and print a code to share with the other session.
-- `/agent-wormhole connect <code>` to join the channel from the other side.
+- `/agent-wormhole pair <peer-name>` to add a new peer (the skill walks both sides through it).
+- `/agent-wormhole` to start the listener for an already-paired peer.
 
-The skill teaches Claude to use Monitor for real-time message delivery, send text and files, wait for the peer to join, and clean up the channel when the work is done.
-
-## Security
-
-- End to end encrypted with AES-256-GCM, and the two directions use separate keys derived via HKDF.
-- SPAKE2 password-authenticated key exchange, so both sides prove they know the channel code while keeping the code off the wire entirely.
-- A fresh session key for every connection, so a compromised session reveals only itself.
-- Channels are single-use, and the host stops listening after the first peer connects.
-- Channels are ephemeral, with temp files cleaned up on close and a one-hour inactivity timeout.
-
-The relay server is a blind router. It pairs two parties holding the same channel code and shuttles encrypted frames between them. The relay only sees envelope metadata, and the payload stays encrypted end to end the whole trip.
+Outbound messages and files use `agent-wormhole send` / `agent-wormhole send-file` directly via Bash.
 
 ## How it works
 
-1. The host generates a human-readable channel code and registers it with the relay.
-2. The peer connects to the relay with the same code.
-3. The relay pairs them and streams encrypted frames between the two sockets.
-4. The host and peer run a SPAKE2 key exchange over that stream, proving they both know the code while keeping it off the wire.
-5. Two direction-separated AES-256-GCM keys are derived via HKDF.
-6. Messages and files flow bidirectionally over the encrypted channel.
+1. **Identity:** each machine holds a long-lived secp256k1 keypair (`~/.agent-wormhole/identity.key`, 0600). The x-only BIP-340 pubkey is the addressable name on the Nostr network.
+2. **Pairing:** the skill runs `wormhole send/receive` to swap identity envelopes between two trusted hosts (one short code per direction). Each side calls `agent-wormhole trust` to record the peer.
+3. **Text messages:** NIP-44 v2 encryption + NIP-17 three-layer gift-wrap (rumor → seal signed by sender → gift wrap signed by an ephemeral key). Relays see only `kind=1059` events tagged for the recipient. Sender identity is hidden from the relay.
+4. **File transfer:** `send-file` spawns a `wormhole send` subprocess, posts the negotiated code in an encrypted file-offer DM, and the recipient's listener auto-invokes `wormhole receive` (transfer authenticated by magic-wormhole's PAKE).
+5. **Relay pool:** the listener and sender connect to N relays concurrently, dedupe events by id, and reconnect with backoff on disconnect.
 
-For machines on the same network or the same Tailnet, you can skip the relay with `--direct`:
+## Configuration
 
-```bash
-# host listens on a local TCP port
-agent-wormhole host --direct
+Relay list resolution order: `AGENT_WORMHOLE_RELAYS` env var (comma-separated) → `~/.agent-wormhole/config.json` (`{"relays":[…]}`) → bundled defaults (damus, nos.lol, primal).
 
-# peer connects with a port-prefixed code and a hostname
-agent-wormhole connect <port>-<word>-<word>-<word>@<hostname>
-```
+The `wormhole` CLI must be on PATH; it ships with the `magic-wormhole` Python dep.
 
-## Channel limits
+## Security
 
-The relay enforces a few limits:
-
-- Channels expire after an hour of inactivity, and sending any message or keepalive resets the clock.
-- 60 messages per minute and 50 MB per minute per channel.
-- 10 MB maximum per frame.
+- Identity keys never leave their machine. Losing the keyfile means re-pairing with every peer.
+- Messages are NIP-44 v2 (ChaCha20 + HMAC-SHA256, HKDF over ECDH x-coord). All known canonical test vectors pass.
+- NIP-17 gift-wrap hides the sender from the relay. The recipient's pubkey is necessarily visible to the relay (it's used as the `#p` subscription filter); run your own relay or trust the chosen relay set's anonymity properties if you need stronger anonymity.
+- File transfer uses magic-wormhole's PAKE handshake; only the negotiated short code (delivered over the encrypted DM) can complete the transfer.
 
 ## License
 

@@ -1,11 +1,26 @@
-"""Configuration for agent-wormhole."""
+from __future__ import annotations
+
+import json
 import os
+from pathlib import Path
 
-DEFAULT_RELAY_URL = "wss://relay-production-940a.up.railway.app"
+DEFAULT_RELAYS = [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+]
+
+DEFAULT_HOME = Path.home() / ".agent-wormhole"
 
 
-def get_relay_url(override: str | None = None) -> str:
-    """Return the relay URL, checking override -> env var -> default."""
-    if override:
-        return override
-    return os.environ.get("AGENT_WORMHOLE_RELAY_URL", DEFAULT_RELAY_URL)
+def resolve_relays(config_path: Path | None = None) -> list[str]:
+    env = os.environ.get("AGENT_WORMHOLE_RELAYS")
+    if env:
+        return [r.strip() for r in env.split(",") if r.strip()]
+    if config_path is None:
+        config_path = DEFAULT_HOME / "config.json"
+    if config_path.exists():
+        data = json.loads(Path(config_path).read_text())
+        if "relays" in data:
+            return list(data["relays"])
+    return list(DEFAULT_RELAYS)

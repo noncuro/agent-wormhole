@@ -1,164 +1,115 @@
 ---
 name: agent-wormhole
-description: Open a secure ephemeral channel to communicate with another Claude Code instance. Use when you need to send or receive messages, credentials, or files to/from another AI agent session.
-argument-hint: "<action> (host, connect <code>)"
+description: Pair with another Claude Code instance and exchange encrypted messages and files. Use to send/receive text, credentials, or files between AI agent sessions. First contact pairs identities; afterwards, peers are addressable by name forever.
+argument-hint: "[pair <peer-name>] | (no args = open listener for already-paired peers)"
 ---
 
 # Agent Wormhole
 
-Secure, encrypted communication channel between two Claude Code instances.
+Encrypted, identity-based communication between Claude Code instances using Nostr DMs and magic-wormhole for bulk files.
 
 ## Quick Reference
 
 | You want to... | Command |
 |---|---|
-| **Host** a new channel | `/agent-wormhole` (no args) — hosts and gives you a code to share |
-| **Connect** to a channel | `/agent-wormhole connect <code>` — paste the code the host gave you |
+| **Pair** with a new peer (first contact) | `/agent-wormhole pair <peer-name>` |
+| **Listen** for messages from already-paired peers | `/agent-wormhole` |
+| **Send** to a paired peer | `agent-wormhole send <peer> "<msg>"` |
+| **Send a file** to a paired peer | `agent-wormhole send-file <peer> <path>` |
 
 ## Prerequisites
 
-`agent-wormhole` must be installed and this skill must be set up. Check both:
-
 ```bash
-agent-wormhole --help
+agent-wormhole --help        # must succeed
+wormhole --version           # required for pairing + bulk files; ships with magic-wormhole
 ```
 
 If not installed:
 
 ```bash
-pip install agent-wormhole
-# or: uv tool install agent-wormhole
-```
-
-If this skill isn't yet in `~/.claude/skills/agent-wormhole/`, run the setup command and it will print step-by-step instructions for you to follow:
-
-```bash
-agent-wormhole setup
+uv tool install agent-wormhole
+agent-wormhole setup    # prints how to symlink the skill
 ```
 
 **Note:** This skill requires the Monitor tool, built into Claude Code since v2.1.98. If Monitor isn't available, run `claude update`.
 
 ## Quiet-by-default output policy
 
-Every Monitor notification becomes a line in the user's transcript. Narrating each one (`Starting...`, `Waiting...`, `Paired...`) produces visual noise that adds nothing. So:
+Every Monitor notification becomes a line in the user's transcript. Don't narrate setup, handshakes, or `received` lines you'll handle automatically. **Only speak when there's something actionable**: a code to read aloud, an inbound text you want the user to see, a delivered file, or an error.
 
-- **Do not announce** that you're starting, waiting, or that the handshake is in progress.
-- **Do not narrate** intermediate events (`paired`, `reconnecting`, `reconnected`). Consume them silently.
-- **Only speak when there's something actionable for the user**: the code to share (host), successful connection, disconnection, or an error.
+## Pairing (first contact)
 
-If there's nothing to say, say nothing — let the next meaningful event be the first thing the user reads from you.
+Pairing exchanges identity envelopes over magic-wormhole, in both directions, then writes each side's trust file. The skill drives both Claude instances through it.
 
-## Hosting a Channel (you are the initiator)
+You need TWO short wormhole codes — one each direction. The user reads them between machines (aloud, paste, etc.).
 
-Start a channel and share the code with the other instance:
+**Role A (sender goes first):**
 
-1. Start the channel using Monitor — **do not emit any message before or after this call**:
+1. Print this machine's envelope and start `wormhole send` to ship it. Use Bash:
+   ```bash
+   agent-wormhole identity-envelope | wormhole send --text -
    ```
-   Monitor(
-     command="agent-wormhole host",
-     description="Wormhole channel",
-     persistent=True
-   )
+   Capture stderr/stdout for the line `Wormhole code is: <code-A>`. Tell the user: **"Read this code to the other machine: `<code-A>`"**.
+
+2. When the other side echoes back its envelope, the user gives you Code B. Run:
+   ```bash
+   wormhole receive <code-B>
    ```
-2. Silently consume events until you receive `{"type":"status","event":"channel","code":"<word>-<word>-<word>"}`. This is the first thing you announce to the user:
+   It prints a single JSON line (the peer's envelope). Parse it:
+   ```json
+   {"type":"identity","pubkey":"...","name":"...","relays":["wss://..."]}
    ```
-   /agent-wormhole connect <code>
+   Then add to your trust file:
+   ```bash
+   agent-wormhole trust <pubkey> <peer-name> --relays <comma-relays>
    ```
-   No hostname needed -- the relay server handles routing.
-3. Silently wait for `{"type":"status","event":"connected"}`. Announce connection in one short line, then stand by.
+   Use the `<peer-name>` the user supplied to `/agent-wormhole pair <peer-name>`, not the hostname inside the envelope.
 
-## Connecting to a Channel (you received a code)
+**Role B (the side that ran `/agent-wormhole pair <name>` after being given Code A):**
 
-If invoked as `/agent-wormhole connect <code>`, parse the code from the argument.
+Same flow, reversed: `wormhole receive <code-A>` first, parse, run `agent-wormhole trust`, then `agent-wormhole identity-envelope | wormhole send --text -`, surface Code B for the user to read back.
 
-1. Start listening using Monitor — **no preamble message**:
-   ```
-   Monitor(
-     command="agent-wormhole connect <code>",
-     description="Wormhole channel",
-     persistent=True
-   )
-   ```
-2. Silently wait for `{"type":"status","event":"connected"}`. Do not narrate `waiting` or `paired`.
-3. On `connected`, tell the user you're connected and ready to send/receive in one short line.
+Once both sides have `trust`'d each other, fall through into the "listen" flow below.
 
-## Sending Messages
+## Listening (already paired)
 
-Use Bash to send. Include `--role host` or `--role peer` matching your side of the channel:
+For an existing peer, skip pairing entirely. Start the listener under Monitor and stay quiet until something arrives.
 
-```bash
-# If you hosted the channel:
-agent-wormhole send <code> "your message here" --role host
-
-# If you connected to the channel:
-agent-wormhole send <code> "your message here" --role peer
+```
+Monitor(
+  command="agent-wormhole listen",
+  description="Inbound agent-wormhole DMs",
+  persistent=True
+)
 ```
 
-To send a file:
-```bash
-agent-wormhole send <code> --file /path/to/file --role host
-```
+Each notification is one JSON line:
 
-The `--role` flag is required when both host and peer run on the same machine. On separate machines it auto-detects.
+- **Text**: `{"type":"text","from":"<peer>","pubkey":"<short>","content":"<msg>","received_at":<ts>}`
+- **File** (auto-received from a trusted peer): `{"type":"file","from":"<peer>","name":"<file>","saved_to":"<path>","size":<bytes>,"received_at":<ts>}` — the file is already on disk under `/tmp/agent-wormhole/<peer>/files/`. Use Read tool to load.
 
-## Receiving Messages
+Display incoming text to the user clearly: **`<peer> says:` `<msg>`**. For files, mention the path and offer to open/process it.
 
-Messages arrive as Monitor notifications (JSON lines):
-
-- **Text**: `{"type":"text","body":"the message"}`
-- **Large text** (>1KB): `{"type":"text","saved_to":"/tmp/agent-wormhole/messages/123.txt","size":4096}` -- use Read tool to get the content
-- **File**: `{"type":"file","name":"config.json","saved_to":"/tmp/agent-wormhole/files/config.json","size":2048}` -- use Read tool to get the file
-
-When displaying messages to the user, format them clearly so both sides of the conversation are easy to distinguish:
-
-- Incoming messages: **Peer says:** `<message>`
-- Outgoing messages (after sending): **Sent:** `<message>`
-- Status events: display inline, e.g. `[connected]`, `[peer disconnected]`
-
-## Channel Limits
-
-- **Inactivity timeout**: Channels expire after **1 hour** with no messages or keepalives. Finish work promptly or send periodic messages to keep the channel alive.
-- **Rate limits**: 60 messages/minute, 50 MB/minute per channel. Batch small messages where practical.
-- **Max frame size**: 10 MB per message/file.
-- **Disconnection**: If the peer disconnects, you'll receive `{"type":"status","event":"peer_disconnected"}`. The channel stays alive -- the peer can reconnect within the 1-hour TTL.
-- **Auto-reconnect on network blips**: If your own websocket drops (flaky wifi, brief outage), the client reconnects silently and replays any frames buffered by the relay while you were away. You'll see `{"type":"status","event":"reconnecting"}` followed by `{"type":"status","event":"reconnected"}`. No action needed. If reconnect fails after several retries, you'll get `{"type":"status","event":"disconnected"}` and the channel ends. If you see `peer_disconnected`, wait a few seconds -- the peer's client will reconnect automatically and any message they send next will reach you.
-
-## Important: Save Before Closing
-
-Channel cleanup deletes ALL temporary files. Before closing a channel, save anything important to its permanent destination:
-
-- **Credentials/API keys** -> 1Password, .env files, or project config
-- **Config files** -> Copy to the project directory
-- **Important text** -> Save to a file in the project
-
-## Closing
+## Sending
 
 ```bash
-agent-wormhole close <code>
+agent-wormhole send <peer> "your message"
+agent-wormhole send-file <peer> /path/to/file
 ```
 
-The channel also cleans up automatically on disconnect (e.g., if the peer closes their end or the Monitor is cancelled). Prefer explicit `close` to ensure cleanup happens.
+`send` is for text. `send-file` initiates a magic-wormhole transfer in the background, posts a tiny file-offer DM, and the recipient's listener auto-accepts (no user interaction needed on the other side). Use `send-file` for anything >100 KB or any binary payload.
 
-## Direct Mode (Local/Tailscale)
-
-For machines on the same network, you can skip the relay:
+## Trust management
 
 ```bash
-# Host (direct TCP)
-agent-wormhole host --direct
-
-# Peer (code includes port, needs hostname)
-agent-wormhole connect <port>-<word>-<word>-<word>@<hostname>
+agent-wormhole peers              # list paired peers
+agent-wormhole whoami             # this machine's pubkey + relays
+agent-wormhole untrust <peer>     # revoke trust
 ```
 
-## Status Events
+## Security model
 
-- `{"type":"status","event":"channel","code":"..."}` -- channel created (host only)
-- `{"type":"status","event":"paired"}` -- peer found on relay, handshake starting
-- `{"type":"status","event":"connected"}` -- peer connected, ready to communicate
-- `{"type":"status","event":"disconnected"}` -- peer disconnected
-- `{"type":"status","event":"peer_disconnected"}` -- peer dropped (relay mode, channel still alive; peer may auto-reconnect)
-- `{"type":"status","event":"reconnecting"}` -- our websocket dropped, reopening (transient)
-- `{"type":"status","event":"reconnected"}` -- websocket back up, resuming
-- `{"type":"status","event":"handshake_failed","detail":"..."}` -- authentication failed (wrong code)
-- `{"type":"status","event":"error","detail":"..."}` -- other error
+- Identity is a persistent secp256k1 keypair at `~/.agent-wormhole/identity.key` (mode 0600). Losing it means re-pairing with every peer.
+- All messages are NIP-17 gift-wrapped DMs — relay operators see only `kind=1059` events with the recipient's pubkey tagged. Sender identity is hidden from relays.
+- Untrusted senders are silently dropped (no notification to you).
+- File transfer uses magic-wormhole's PAKE handshake; only the negotiated code (delivered over the encrypted Nostr DM) can complete the transfer.
