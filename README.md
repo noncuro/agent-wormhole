@@ -4,12 +4,15 @@ A Claude Code session on your laptop can hand a file, a message, or a secret to 
 
 ![demo](./docs/demo.gif)
 
+agent-wormhole is for agent collaboration that outlives a single terminal. Pair once, give each peer a name, and then agents can send context to each other as they work: the branch they are on, what they changed, logs, test output, screenshots, config snippets, or a file that needs review.
+
 ## What you'd use it for
 
-- Moving an API key between machines, sealed end to end, addressable by peer name forever after first contact.
-- Two parallel worktree sessions coordinating who edits what, and handing off context so the next session picks up where the last one left off.
+- Two people working on the same project, each with their own agent, sharing implementation notes, test fixtures, local repro steps, and review feedback without pasting everything through chat.
+- One person coordinating agents on two machines: for example a local laptop agent driving the UI while a cloud or Linux box agent runs backend jobs, GPU tasks, browser tests, or long-running experiments.
+- Parallel worktree sessions coordinating who edits what, and handing off context so the next session picks up where the last one left off.
 - Getting a second opinion from another Claude running with a different model or prompt, and pulling the review back into the current session.
-- Two agents pair programming, one on the frontend and one on the backend, trading schemas and test fixtures in real time.
+- Moving an API key, config file, or one-off artifact between machines, sealed end to end, addressable by peer name after first contact.
 
 ## Quickstart
 
