@@ -79,10 +79,17 @@ Monitor(
 )
 ```
 
+The listener is **quiet by default**: it keeps a durable seen-store (keyed on
+message id), so a message is surfaced exactly once — never re-flooded when relays
+replay history on reconnect. On the very first run it silently baselines existing
+backlog and emits a one-line summary instead of the firehose. So you won't drown
+in stale history; only genuinely new messages arrive.
+
 Each notification is one JSON line:
 
 - **Text**: `{"type":"text","from":"<peer>","content":"<msg>",…}` → show it plainly: **`<peer> says:` `<msg>`**.
 - **File** (auto-received from a trusted peer): `{"type":"file","from":"<peer>","name":"<file>","saved_to":"<path>",…}` → the file is already on disk. Mention you received it and offer to open or process it; use the Read tool on `saved_to`.
+- **Backlog** (cold-start summary, not a message): `{"type":"backlog","suppressed":<N>,"through":<ts>}` → N old messages were marked-read without surfacing. **Don't act on it**; at most note "cleared N old messages." Use `agent-wormhole listen --replay` only if you need to audit the suppressed history.
 
 ### Quiet-by-default output policy
 

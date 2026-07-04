@@ -64,9 +64,10 @@ def test_giftwrap_roundtrip(tmp_path):
     assert ["p", recipient.pubkey_hex] in wrap.tags
     assert wrap.pubkey != sender.pubkey_hex
 
-    sender_pub, plaintext = unwrap_giftwrapped_dm(wrap, recipient=recipient)
-    assert sender_pub == sender.pubkey_hex
-    assert plaintext == "hi alice"
+    dm = unwrap_giftwrapped_dm(wrap, recipient=recipient)
+    assert dm.sender_pubkey == sender.pubkey_hex
+    assert dm.content == "hi alice"
+    assert dm.rumor_id and dm.created_at
 
 
 def test_giftwrap_rejects_wrong_recipient(tmp_path):

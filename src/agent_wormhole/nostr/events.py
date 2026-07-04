@@ -167,8 +167,22 @@ def build_giftwrapped_dm(
     return wrap
 
 
-def unwrap_giftwrapped_dm(wrap: Event, *, recipient: Identity) -> tuple[str, str]:
-    """Return (sender_pubkey_hex, plaintext_content). Raises ValueError on failure."""
+@dataclass
+class UnwrappedDM:
+    sender_pubkey: str
+    content: str
+    rumor_id: str      # stable inner-message id — the durable "mark as read" key
+    created_at: int    # inner rumor timestamp (the real send time, not gift-wrap skew)
+
+
+def unwrap_giftwrapped_dm(wrap: Event, *, recipient: Identity) -> UnwrappedDM:
+    """Unwrap a NIP-17 gift wrap. Raises ValueError on failure.
+
+    Returns the sender pubkey, plaintext, and — critically — the inner rumor's
+    stable id and true created_at. The rumor id is what the listener dedupes on:
+    it survives per-relay gift-wrap re-randomization, so it uniquely identifies
+    a logical message no matter how many times or ways it's replayed.
+    """
     if wrap.kind != 1059:
         raise ValueError(f"not a gift wrap (kind={wrap.kind})")
     if not verify_event(wrap):
@@ -186,4 +200,19 @@ def unwrap_giftwrapped_dm(wrap: Event, *, recipient: Identity) -> tuple[str, str
     rumor = json.loads(rumor_json)
     if rumor["pubkey"] != seal.pubkey:
         raise ValueError("rumor.pubkey != seal.pubkey — impersonation attempt")
-    return seal.pubkey, rumor["content"]
+    # Derive the rumor id if the sender didn't include it (older senders / safety).
+    rumor_id = rumor.get("id") or sha256(
+        serialize_for_id(
+            pubkey=rumor["pubkey"],
+            created_at=rumor["created_at"],
+            kind=rumor["kind"],
+            tags=rumor.get("tags", []),
+            content=rumor["content"],
+        ).encode()
+    ).hexdigest()
+    return UnwrappedDM(
+        sender_pubkey=seal.pubkey,
+        content=rumor["content"],
+        rumor_id=rumor_id,
+        created_at=int(rumor["created_at"]),
+    )

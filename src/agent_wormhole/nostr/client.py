@@ -11,11 +11,18 @@ from agent_wormhole.nostr.events import Event
 
 
 @dataclass
+class EoseMarker:
+    """Enqueued when a relay signals End Of Stored Events for a subscription —
+    the boundary between replayed history and live messages, per relay."""
+    url: str
+
+
+@dataclass
 class Subscription:
     sub_id: str
     queue: asyncio.Queue
 
-    async def next(self) -> Event:
+    async def next(self):
         return await self.queue.get()
 
 
@@ -85,7 +92,10 @@ class RelayPool:
                 self._seen_ids.add(ev_dict["id"])
                 await entry[0].queue.put(Event.from_dict(ev_dict))
             elif tag == "EOSE":
-                pass
+                sub_id = msg[1]
+                entry = self._subs.get(sub_id)
+                if entry is not None:
+                    await entry[0].queue.put(EoseMarker(url=url))
             elif tag == "OK":
                 _, ev_id, ok, _msg = msg
                 waiters = self._ack_waiters.get(ev_id)
@@ -120,6 +130,9 @@ class RelayPool:
         for ws in self._conns.values():
             await ws.send(json.dumps(["REQ", sub_id, flt]))
         return sub
+
+    def connected_urls(self) -> list[str]:
+        return list(self._conns.keys())
 
     async def unsubscribe(self, sub_id: str) -> None:
         for ws in self._conns.values():

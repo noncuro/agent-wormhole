@@ -173,9 +173,10 @@ def _decode_accept(ev, *, identity: Identity, nonce: str) -> tuple[str, dict] | 
     """Return (authenticated_sender_pubkey, accept_body) if `ev` is a valid,
     nonce-matching pairing-accept addressed to us; else None."""
     try:
-        sender_pub, content = unwrap_giftwrapped_dm(ev, recipient=identity)
+        dm = unwrap_giftwrapped_dm(ev, recipient=identity)
     except Exception:
         return None
+    sender_pub, content = dm.sender_pubkey, dm.content
     try:
         body = json.loads(content)
     except ValueError:

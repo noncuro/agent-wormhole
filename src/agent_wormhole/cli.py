@@ -34,6 +34,10 @@ def _config_path() -> Path:
     return _home() / "config.json"
 
 
+def _seen_path() -> Path:
+    return _home() / "seen.json"
+
+
 def _local_name() -> str:
     return socket.gethostname()
 
@@ -67,14 +71,30 @@ def identity_envelope():
 
 
 @app.command()
-def listen():
-    """Long-running. Subscribe to inbound DMs; emit JSON lines for Monitor."""
+def listen(
+    replay: bool = typer.Option(
+        False,
+        "--replay",
+        help="Re-emit stored history instead of the default quiet catch-up. "
+        "By default, messages already marked-read are suppressed and a cold "
+        "start silently baselines existing backlog (emitting only a summary).",
+    ),
+):
+    """Long-running. Subscribe to inbound DMs; emit JSON lines for Monitor.
+
+    Quiet by default: a durable seen-store (keyed on message id) means a message
+    is surfaced once and never re-surfaced, even though relays replay history on
+    every reconnect. Use --replay to audit the full stored history.
+    """
     ident = load_or_create(_identity_path())
     trust = TrustStore(_trust_path())
     relays = resolve_relays(config_path=_config_path())
 
     async def _run():
-        listener = Listener(identity=ident, trust=trust, relays=relays)
+        listener = Listener(
+            identity=ident, trust=trust, relays=relays,
+            seen_path=_seen_path(), replay=replay,
+        )
         await listener.start()
         try:
             await asyncio.Event().wait()

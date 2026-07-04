@@ -2,8 +2,20 @@ import asyncio
 import json
 import pytest
 from agent_wormhole.identity import load_or_create
-from agent_wormhole.nostr.client import RelayPool
+from agent_wormhole.nostr.client import EoseMarker, RelayPool
 from agent_wormhole.nostr.events import build_event
+
+
+async def _next_event(sub, timeout):
+    """Pull the next real Event, skipping EOSE markers (end-of-stored-events)."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        item = await asyncio.wait_for(sub.next(), timeout=remaining)
+        if not isinstance(item, EoseMarker):
+            return item
 
 
 @pytest.mark.asyncio
@@ -18,7 +30,7 @@ async def test_publish_then_subscribe_delivers(relay, tmp_path):
     assert acks[url] is True
 
     sub = await pool.subscribe({"kinds": [1]})
-    received_event = await asyncio.wait_for(sub.next(), timeout=2.0)
+    received_event = await _next_event(sub, timeout=2.0)
     assert received_event.content == "hello"
 
     await pool.close()
@@ -35,9 +47,10 @@ async def test_dedupe_across_relays(tmp_path):
         await pool.publish(ev)
 
         sub = await pool.subscribe({"kinds": [1]})
-        first = await asyncio.wait_for(sub.next(), timeout=2.0)
+        first = await _next_event(sub, timeout=2.0)
+        # No *second* distinct event (EOSE markers are fine and ignored).
         with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(sub.next(), timeout=0.3)
+            await _next_event(sub, timeout=0.3)
         assert first.id == ev.id
         await pool.close()
 
@@ -77,7 +90,7 @@ async def test_resubscribe_after_disconnect(tmp_path):
         await asyncio.sleep(2.0)
         ev = build_event(ident, kind=1, tags=[], content="post-reconnect")
         await pool.publish(ev)
-        got = await asyncio.wait_for(sub.next(), timeout=3.0)
+        got = await _next_event(sub, timeout=3.0)
         assert got.content == "post-reconnect"
         await pool.close()
 
